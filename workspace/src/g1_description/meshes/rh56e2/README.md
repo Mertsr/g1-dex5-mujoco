@@ -2,7 +2,11 @@
 
 The hand descriptions (`urdf/rh56e2_left.urdf.xacro`, `urdf/rh56e2_right.urdf.xacro`) reference
 their meshes as `package://g1_description/meshes/rh56e2/{left,right}/<name>.STL`. The STL files
-come from the vendor's SolidWorks export and are not checked in yet.
+come from the vendor's SolidWorks export. **Placeholder STLs are checked in for now** (tiny
+tetrahedra, one per name below) so the xacro resolves and the sim compiles without real
+geometry; replace them with the vendor's export before trusting any visual, collision or mass
+property here -- the inertials in rh56e2_left/right.urdf.xacro are already the real vendor
+values and do not depend on these files.
 
 Put the contents of each export's `meshes/` folder here:
 
