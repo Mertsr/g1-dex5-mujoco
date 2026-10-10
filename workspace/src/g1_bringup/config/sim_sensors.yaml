@@ -72,3 +72,31 @@ grasp_weld:
   # Deliberately below close_fraction: without the gap a hand resting at the threshold would
   # drop and re-grab the object every few ticks.
   release_fraction: 0.3
+
+# SIMULATION ONLY. Drags any freely-jointed body resting on a `conveyor_belt*` geom along
+# that geom's own local +x at a fixed speed, standing in for a real belt's friction drive
+# the way grasp_weld stands in for finger contact -- see
+# workspace/vendor/unitree_mujoco/conveyor_handler.h for the mechanism.
+#
+# Only g1_conveyor_scene.xml declares a `conveyor_belt` geom, so this is a no-op (not even a
+# wasted thread) against every other scene regardless of this `enabled` flag.
+#
+# NONE OF THESE NUMBERS TRANSFER TO HARDWARE. There the belt's own motor and friction do
+# this job; these describe the simulated zone, not any real conveyor, and sit on the
+# hardware re-validation list alongside grasp_weld's thresholds.
+conveyor:
+  enabled: true
+
+  # Target speed along the belt's local +x, m/s. Positive only -- a belt that should run the
+  # other way is turned around in the scene (its own pose), not given a negative speed here.
+  speed_mps: 0.08
+
+  # N per (m/s) of velocity error on the driven body's linear dofs. Large enough to reach
+  # speed_mps well inside one capture pass at the small-part masses used here (tens of
+  # grams), not tuned against any real belt's drive torque.
+  gain: 40.0
+
+  # How far above the belt's own top surface a body's origin may sit and still count as "on"
+  # it, in metres. Covers a settling bounce without reaching so high that a part lifted off
+  # by the arm is still dragged.
+  capture_height_m: 0.09
