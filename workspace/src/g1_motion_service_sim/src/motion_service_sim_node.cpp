@@ -559,6 +559,10 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     il_config_.command_height = declare_parameter("walk_policy_isaaclab.command_height", 0.8);
     const auto lower_kp       = declare_parameter("walk_policy_isaaclab.lower_kp", std::vector<double>{});
     const auto lower_kd       = declare_parameter("walk_policy_isaaclab.lower_kd", std::vector<double>{});
+    // 0 matches the reference script (DelayBuffer's lag defaults to 0, set_time_lag() is never
+    // called). Clamped to kIlMaxDelaySteps by IlActionDelay itself.
+    const auto action_delay_steps =
+        declare_parameter("walk_policy_isaaclab.action_delay_steps", std::int64_t{ 0 });
 
     if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||
         default_joint_vel.size() != kIlNumJoints || leg_action_indices.size() != kIlNumLegs ||
@@ -609,7 +613,8 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     }
 
     il_history_ = std::make_unique<IlObsHistory>();
-    il_delay_   = std::make_unique<IlActionDelay>();
+    il_delay_   = std::make_unique<IlActionDelay>(
+        static_cast<std::size_t>(std::max<std::int64_t>(0, action_delay_steps)));
     // An action is a near-zero-centered network output, not an absolute joint angle -- IsaacLab's
     // action-manager buffer starts at torch.zeros(), so the first observation's last_action term
     // should too. il_last_full_action_{} above already zero-initializes it; this loop is only
@@ -628,12 +633,13 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     RCLCPP_WARN(
         get_logger(),
         "IsaacLab-sourced walking policy loaded from '%s' (warm-up %.1f ms), running at %.1f Hz "
-        "and owning the 12 leg motors; waist held at default, arms kept by /arm_sdk. UNVERIFIED "
-        "gains and command semantics -- see walk_policy_isaaclab.yaml's own comments before "
-        "trusting this with real motion.",
+        "with %zu-tick action delay, owning the 12 leg motors; waist held at default, arms kept "
+        "by /arm_sdk. UNVERIFIED gains and command semantics -- see walk_policy_isaaclab.yaml's "
+        "own comments before trusting this with real motion.",
         model_path.c_str(),
         il_session_->warmupSeconds() * 1000.0,
-        rate_hz);
+        rate_hz,
+        il_delay_->delaySteps());
     return true;
 }
 

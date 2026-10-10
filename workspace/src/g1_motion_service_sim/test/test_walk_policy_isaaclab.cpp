@@ -196,18 +196,40 @@ TEST(WalkPolicyIsaacLab, HistoryEvictsOldestOnceFull)
     EXPECT_THAT(flat[(kIlHistLen - 1) * kIlObsStepDim], FloatEq(999.0F));
 }
 
-TEST(WalkPolicyIsaacLab, ActionDelayHoldsOldestUntilFullThenReturnsDelayedValue)
+// The default must be NO delay: the reference script's DelayBuffer(5, ...) is a capacity, its
+// lag stays at 0. Reading that 5 as the lag added 100 ms of latency and the robot fell.
+TEST(WalkPolicyIsaacLab, ActionDelayDefaultsToPassThrough)
 {
     IlActionDelay delay;
+    EXPECT_EQ(delay.delaySteps(), 0U);
+    for (int i = 1; i <= 8; ++i)
+    {
+        std::array<double, kIlNumLegs> step{};
+        step[0]        = static_cast<double>(i);
+        const auto out = delay.pushAndPop(step);
+        EXPECT_NEAR(out[0], static_cast<double>(i), 1e-9) << "tick " << i;
+    }
+}
+
+TEST(WalkPolicyIsaacLab, ActionDelayClampsToMax)
+{
+    IlActionDelay delay(kIlMaxDelaySteps + 10);
+    EXPECT_EQ(delay.delaySteps(), kIlMaxDelaySteps);
+}
+
+TEST(WalkPolicyIsaacLab, ActionDelayHoldsOldestUntilFullThenReturnsDelayedValue)
+{
+    constexpr std::size_t kSteps = 3;
+    IlActionDelay         delay(kSteps);
     std::array<double, kIlNumLegs> first{};
     first[0] = 1.0;
 
-    // Before the queue has kIlDelaySteps+1 entries, pushAndPop returns the oldest (first) value
-    // -- never a hole, never zero.
+    // Before the queue has kSteps+1 entries, pushAndPop returns the oldest (first) value --
+    // never a hole, never zero.
     auto out = delay.pushAndPop(first);
     EXPECT_NEAR(out[0], 1.0, 1e-9);
 
-    for (int i = 2; i <= static_cast<int>(kIlDelaySteps); ++i)
+    for (int i = 2; i <= static_cast<int>(kSteps); ++i)
     {
         std::array<double, kIlNumLegs> step{};
         step[0] = static_cast<double>(i);
@@ -215,7 +237,7 @@ TEST(WalkPolicyIsaacLab, ActionDelayHoldsOldestUntilFullThenReturnsDelayedValue)
         EXPECT_NEAR(out[0], 1.0, 1e-9) << "tick " << i << " should still see the first push";
     }
 
-    // One more push fills the queue past kIlDelaySteps+1 entries: now the delayed (second) value
+    // One more push fills the queue past kSteps+1 entries: now the delayed (second) value
     // comes out.
     std::array<double, kIlNumLegs> last{};
     last[0] = 100.0;

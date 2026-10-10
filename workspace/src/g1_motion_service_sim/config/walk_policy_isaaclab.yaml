@@ -17,6 +17,12 @@
 
       rate_hz: 50.0
 
+      # Ticks of actuation lag between inference and the applied leg target. 0 matches the
+      # reference script: its DelayBuffer(5, ...) is a 5-deep CAPACITY whose lag starts at 0,
+      # and set_time_lag() is never called. Max 5. A previous version hardcoded 5 (100 ms),
+      # which the policy never saw and which made it chase its own corrections and fall.
+      action_delay_steps: 0
+
       # All 29 joints, IsaacLab runtime order -- MEASURED from a live environment dump, not
       # transcribed from a config file. Also used to size default_joint_pos/vel below.
       joint_names:

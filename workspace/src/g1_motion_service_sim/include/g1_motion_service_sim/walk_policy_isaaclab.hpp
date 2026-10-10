@@ -21,10 +21,15 @@
  *   Network in  = 10 stacked steps, oldest-to-newest = 910 elements (IlObsHistory).
  *   Network out = 12 raw actions, in leg_action_indices order (hip_pitch, hip_roll, hip_yaw,
  *                 knee, ankle_pitch, ankle_roll -- each left then right).
- *   Applied cmd = default_joint_pos[leg] + action * action_scale, through a 5-step delay
- *                 buffer (the policy was trained expecting this actuation lag) -- see
- *                 IlActionDelay. Waist is NEVER commanded by this policy; it stays at
- *                 default_joint_pos, same as the reference script's default_waist_positions.
+ *   Applied cmd = default_joint_pos[leg] + action * action_scale, through IlActionDelay with
+ *                 ZERO delay by default. The reference script builds DelayBuffer(5, ...), but
+ *                 that 5 is IsaacLab's history CAPACITY, not the lag: DelayBuffer's time lag
+ *                 starts at 0 and the script never calls set_time_lag(), so its actions apply
+ *                 on the same tick. An earlier version of this file read the 5 as the lag and
+ *                 added 100 ms (5 x 20 ms) of actuation latency the policy never saw -- enough
+ *                 to make a balancing humanoid chase its own corrections and fall. Waist is
+ *                 NEVER commanded by this policy; it stays at default_joint_pos, same as the
+ *                 reference script's default_waist_positions.
  *
  * NOT present in this layout, unlike walker.onnx's: no base_lin_vel term at all.
  *
@@ -56,7 +61,9 @@ inline constexpr std::size_t kIlNumArmsObs = 14;  // observed, never commanded
 inline constexpr std::size_t kIlObsStepDim = 91;  // 3+3+4+26+26+29
 inline constexpr std::size_t kIlHistLen    = 10;  // fixed: the two shipped ONNX models are [1,910]
 inline constexpr std::size_t kIlObsDim     = kIlHistLen * kIlObsStepDim;  // 910
-inline constexpr std::size_t kIlDelaySteps = 5;
+/// Upper bound on IlActionDelay's configurable lag (DelayBuffer(5, ...)'s capacity in the
+/// reference script). The DEFAULT lag is 0 -- see the file comment.
+inline constexpr std::size_t kIlMaxDelaySteps = 5;
 
 /**
  * @brief IsaacLab runtime joint index -> DDS (Unitree LowState/LowCmd) motor index.
@@ -169,22 +176,31 @@ private:
  * @brief Fixed-length delay queue on the APPLIED 12-dim leg target (DDS-order, post action_scale).
  *
  * pushAndPop(target) enqueues this tick's scaled leg target and returns what was pushed
- * kIlDelaySteps ticks ago, or the oldest available value before the queue has filled --
+ * delay_steps ticks ago, or the oldest available value before the queue has filled --
  * never garbage, never a hold at zero that would snap the legs to default_joint_pos.
+ * delay_steps == 0 (the default, matching the reference script) returns target unchanged.
  */
 class IlActionDelay
 {
 public:
+    explicit IlActionDelay(std::size_t delay_steps = 0)
+        : delay_steps_(std::min(delay_steps, kIlMaxDelaySteps))
+    {
+    }
+
     std::array<double, kIlNumLegs> pushAndPop(const std::array<double, kIlNumLegs>& target)
     {
         buf_.push_back(target);
-        while (buf_.size() > kIlDelaySteps + 1) buf_.pop_front();
+        while (buf_.size() > delay_steps_ + 1) buf_.pop_front();
         return buf_.front();
     }
+
+    std::size_t delaySteps() const { return delay_steps_; }
 
     void reset() { buf_.clear(); }
 
 private:
+    std::size_t                                 delay_steps_;
     std::deque<std::array<double, kIlNumLegs>> buf_;
 };
 
