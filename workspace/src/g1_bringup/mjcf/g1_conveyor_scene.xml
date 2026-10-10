@@ -67,20 +67,20 @@
       material="fence_mat" contype="1" conaffinity="1"/>
 
     <!-- Table: lower than g1_manipulation_scene's 0.785 m pedestal (0.75 here, "a little
-         lower" as asked) and pulled in close enough to the belt (0.325 m of open floor
-         between the table's near edge and the belt's near rail) to cover on foot rather than
-         needing to navigate. Near edge still clears the spawned arm the same way the other
+         lower" as asked), pushed up against the far wall (fence_x_max sits at x=2.20; the
+         table's far edge at 2.15 leaves 3 cm clearance) and shifted right, out from under the
+         belt's discharge end. Near edge still clears the spawned arm the same way the other
          scenes do. -->
-    <geom name="table_top" group="2" type="box" size="0.30 0.22 0.015" pos="0.55 -0.10 0.735"
+    <geom name="table_top" group="2" type="box" size="0.30 0.22 0.015" pos="1.85 0.20 0.735"
       material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="0.83 -0.30 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="2.13 0.00 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="0.83 0.10 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="2.13 0.40 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="0.27 -0.30 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.57 0.00 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="0.27 0.10 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.57 0.40 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
 
     <!-- Roller conveyor, 1.5 m long, running along world +x (no rotation this time -- the
          basket at the far end is just "a bit further down +x", which keeps every number in
@@ -105,6 +105,23 @@
       pos="0.55 0.415 0.75" material="rail_mat" contype="1" conaffinity="1"/>
     <geom name="conveyor_rail_far" group="2" type="box" size="0.75 0.01 0.05"
       pos="0.55 0.785 0.75" material="rail_mat" contype="1" conaffinity="1"/>
+
+    <!-- Legs: the belt body sits at z=0.67 with half_z=0.03, so its underside is at 0.64 --
+         these six stand posts (near/mid/far along the length, both rails) hold that up off
+         the floor instead of leaving it floating, the way the rest of this scene's furniture
+         stands on its own legs. -->
+    <geom name="conveyor_leg_near_1" group="2" type="box" size="0.03 0.03 0.32"
+      pos="-0.15 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_near_2" group="2" type="box" size="0.03 0.03 0.32"
+      pos="-0.15 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_mid_1" group="2" type="box" size="0.03 0.03 0.32"
+      pos="0.55 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_mid_2" group="2" type="box" size="0.03 0.03 0.32"
+      pos="0.55 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_far_1" group="2" type="box" size="0.03 0.03 0.32"
+      pos="1.25 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_far_2" group="2" type="box" size="0.03 0.03 0.32"
+      pos="1.25 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
 
     <!-- 14 rollers across the 1.5 m length, visual only (contype 0 -- the belt box under them
          carries the actual contact). Each is a cylinder laid across the belt's width with
@@ -154,6 +171,13 @@
       material="basket_mat" contype="1" conaffinity="1"/>
     <geom name="basket_wall_far2" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.79 0.56"
       material="basket_mat" contype="1" conaffinity="1"/>
+
+    <!-- The basket's own floor sits at z=0.40, same floating-furniture issue the belt had --
+         these two posts hold it up rather than leaving it hanging. -->
+    <geom name="basket_leg_1" group="2" type="box" size="0.025 0.025 0.195"
+      pos="1.33 0.44 0.195" material="basket_mat" contype="1" conaffinity="1"/>
+    <geom name="basket_leg_2" group="2" type="box" size="0.025 0.025 0.195"
+      pos="1.63 0.76 0.195" material="basket_mat" contype="1" conaffinity="1"/>
 
     <!-- Three copies of one part, staged at the belt's near (table) end rather than on the
          table, so the belt starts dragging them towards the basket as soon as the sim comes
