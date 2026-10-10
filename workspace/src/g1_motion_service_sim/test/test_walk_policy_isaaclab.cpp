@@ -128,7 +128,7 @@ TEST(WalkPolicyIsaacLab, ActionToLegTargetsAppliesScaleAndDefault)
     }
 }
 
-TEST(WalkPolicyIsaacLab, BuildFullActionPlacesLegsKeepsRestAtDefault)
+TEST(WalkPolicyIsaacLab, BuildFullActionPlacesLegsKeepsRestAtZero)
 {
     const auto                    cfg = makeConfig();
     std::array<float, kIlNumLegs> raw{};
@@ -140,7 +140,9 @@ TEST(WalkPolicyIsaacLab, BuildFullActionPlacesLegsKeepsRestAtDefault)
         const auto idx = static_cast<std::size_t>(cfg.leg_action_indices[i]);
         EXPECT_THAT(full[idx], FloatEq(raw[i])) << "leg slot " << idx;
     }
-    // Waist (2, 5, 8) and every arm/other slot not in leg_action_indices stays at default.
+    // Waist (2, 5, 8) and every arm/other slot not in leg_action_indices stays at zero -- this
+    // feeds back as next tick's "last_action" observation term, and an action is a
+    // near-zero-centered network output, never an absolute joint angle like default_joint_pos.
     for (std::size_t i = 0; i < kIlNumJoints; ++i)
     {
         const bool is_leg =
@@ -148,7 +150,7 @@ TEST(WalkPolicyIsaacLab, BuildFullActionPlacesLegsKeepsRestAtDefault)
             cfg.leg_action_indices.end();
         if (!is_leg)
         {
-            EXPECT_THAT(full[i], FloatEq(static_cast<float>(cfg.default_joint_pos[i]))) << "slot " << i;
+            EXPECT_THAT(full[i], FloatEq(0.0F)) << "slot " << i;
         }
     }
 }

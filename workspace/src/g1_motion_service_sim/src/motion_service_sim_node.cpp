@@ -610,10 +610,12 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
 
     il_history_ = std::make_unique<IlObsHistory>();
     il_delay_   = std::make_unique<IlActionDelay>();
-    for (std::size_t i = 0; i < kIlNumJoints; ++i)
-    {
-        il_last_full_action_[i] = static_cast<float>(il_config_.default_joint_pos[i]);
-    }
+    // An action is a near-zero-centered network output, not an absolute joint angle -- IsaacLab's
+    // action-manager buffer starts at torch.zeros(), so the first observation's last_action term
+    // should too. il_last_full_action_{} above already zero-initializes it; this loop is only
+    // for readers who come looking for the seed and wonder whether it is deliberate. See
+    // ilBuildFullAction()'s own comment for why default_joint_pos would be wrong here.
+    il_last_full_action_ = {};
 
     // Shared with the walker.onnx path: publishTick() only checks that SOME policy produced a
     // fresh walk_target_q_, not which one.

@@ -50,8 +50,15 @@ std::array<double, kIlNumLegs> ilActionToLegTargets(
 std::array<float, kIlNumJoints> ilBuildFullAction(
     const std::array<float, kIlNumLegs>& raw_action, const IlPolicyConfig& cfg)
 {
-    std::array<float, kIlNumJoints> full{};
-    for (std::size_t i = 0; i < kIlNumJoints; ++i) full[i] = static_cast<float>(cfg.default_joint_pos[i]);
+    // This feeds back as next tick's "last_action" observation term (see
+    // ilAssembleObservationStep). An action is a near-zero-centered network output, not an
+    // absolute joint angle -- IsaacLab's action-manager buffer for an unwritten (non-policy)
+    // joint stays at its torch.zeros() initial value for the life of the episode, it is never
+    // populated with that joint's default_joint_pos. Filling non-leg slots with
+    // default_joint_pos (up to 0.87 rad for a shoulder) was feeding the network a persistent,
+    // out-of-distribution signal on ~1/3 of every observation step -- a likely cause of the
+    // erratic, fast-twitching joint behaviour seen on hardware-in-sim testing.
+    std::array<float, kIlNumJoints> full{};  // zero-initialized: non-leg slots stay 0.
     for (std::size_t i = 0; i < kIlNumLegs; ++i)
         full[static_cast<std::size_t>(cfg.leg_action_indices[i])] = raw_action[i];
     return full;

@@ -133,6 +133,14 @@ def _check_environment(context, *args, **kwargs):
 def _launch_setup(context, *args, **kwargs):
     headless = LaunchConfiguration("headless").perform(context).lower() == "true"
     pin_pelvis = LaunchConfiguration("pin_pelvis").perform(context).lower() == "true"
+    walk_policy = LaunchConfiguration("walk_policy").perform(context).strip().lower()
+    if walk_policy not in ("walker", "isaaclab", "none"):
+        raise RuntimeError(
+            f"walk_policy:={walk_policy!r} is not a policy. Use 'walker' (default, the "
+            "third-party walker.onnx), 'isaaclab' (Mert's own unitree_sim_isaaclab-trained "
+            "policy.onnx), or 'none' (no walking policy -- same effect as pin_pelvis for "
+            "the legs)."
+        )
 
     sim_env = dict(os.environ)
     sim_env["LD_LIBRARY_PATH"] = UNITREE_ROBOTICS_LIB + ":" + sim_env.get("LD_LIBRARY_PATH", "")
@@ -405,12 +413,19 @@ def _launch_setup(context, *args, **kwargs):
         parameters=[
             os.path.join(motion_service_sim_share, "config", "motion_service_sim.yaml"),
             os.path.join(motion_service_sim_share, "config", "walk_policy.yaml"),
+            os.path.join(motion_service_sim_share, "config", "walk_policy_isaaclab.yaml"),
             # The legs and waist, which no controller owns. Completes pelvis -> torso_link, so
             # without it the sensor frames and both arms are stranded in a TF tree of their
             # own. Costs work on the 1 kHz /lowstate path, so it is not on by default. On
             # hardware this comes from g1_hardware_interface's g1_lowstate_joint_states.
             {"publish_non_arm_joint_states": publish_non_arm},
-            {"walk_policy.enabled": not pin_pelvis},
+            # walk_policy: and pin_pelvis: both choose the leg driver, and pin_pelvis wins --
+            # welding the pelvis and still spinning up a policy that fights a frozen base makes
+            # no sense. The two walker.onnx/walk_policy_isaaclab.enabled flags are themselves
+            # mutually exclusive in the node (walker.onnx wins if both are true), so only one is
+            # ever set true here.
+            {"walk_policy.enabled": (not pin_pelvis) and walk_policy == "walker"},
+            {"walk_policy_isaaclab.enabled": (not pin_pelvis) and walk_policy == "isaaclab"},
             waist_params,
         ],
     )
@@ -492,7 +507,18 @@ def generate_launch_description():
                 default_value="false",
                 description="SIM-ONLY debugging aid: weld the pelvis to the world AND disable the "
                 "walking policy, so the arm bridge can be exercised with nothing else driving the "
-                "legs. Default false -- the policy balances the robot itself.",
+                "legs. Default false -- the policy balances the robot itself. Wins over "
+                "walk_policy: when true, no policy runs regardless of which one is selected.",
+            ),
+            DeclareLaunchArgument(
+                "walk_policy",
+                default_value="walker",
+                description="Which walking policy drives the legs. 'walker' (default): the "
+                "third-party walker.onnx (config/walk_policy.yaml). 'isaaclab': Mert's own "
+                "unitree_sim_isaaclab-trained policy.onnx (config/walk_policy_isaaclab.yaml) -- "
+                "requires that file's onnx_model_path to actually exist under "
+                "share/g1_motion_service_sim/policy/, it is not committed to the repo. 'none': "
+                "no walking policy at all. Ignored (treated as 'none') when pin_pelvis:=true.",
             ),
             DeclareLaunchArgument(
                 "non_arm_joint_states",

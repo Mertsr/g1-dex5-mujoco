@@ -194,7 +194,9 @@ std::array<double, kIlNumLegs> ilActionToLegTargets(
     const std::array<float, kIlNumLegs>& raw_action, const IlPolicyConfig& cfg);
 
 /// Builds next tick's 29-wide last_full_action (IsaacLab order): raw_action at
-/// leg_action_indices, default_joint_pos everywhere else.
+/// leg_action_indices, zero everywhere else -- an action is a near-zero-centered network
+/// output, not an absolute joint angle, so an unwritten (non-leg) slot stays at its
+/// torch.zeros() initial value rather than default_joint_pos.
 std::array<float, kIlNumJoints> ilBuildFullAction(
     const std::array<float, kIlNumLegs>& raw_action, const IlPolicyConfig& cfg);
 
