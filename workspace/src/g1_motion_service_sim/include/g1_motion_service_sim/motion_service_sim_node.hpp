@@ -19,6 +19,8 @@
 #include "g1_motion_service_sim/blend_math.hpp"
 #include "g1_motion_service_sim/loco_fsm.hpp"
 #include "g1_motion_service_sim/walk_policy.hpp"
+#include "g1_motion_service_sim/walk_policy_isaaclab.hpp"
+#include "g1_motion_service_sim/walk_policy_isaaclab_session.hpp"
 #include "g1_motion_service_sim/walk_policy_session.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
@@ -58,6 +60,18 @@ private:
     /// One decimated inference: assembles the observation from the latest state, runs the policy,
     /// and stores the lower-body targets publishTick() consumes.
     void walkPolicyTick();
+
+    /// Alternative to setUpWalkPolicy() for the unitree_sim_isaaclab-sourced policy. Only called
+    /// when walk_policy.enabled is false and walk_policy_isaaclab.enabled is true -- the two are
+    /// mutually exclusive, walker.onnx wins if both are set. See walk_policy_isaaclab.hpp.
+    bool setUpWalkPolicyIsaacLab();
+
+    /// IsaacLab-contract counterpart to walkPolicyTick(): remaps /lowstate from DDS to IsaacLab
+    /// joint order, pushes one 91-element observation step into the 10-step history, runs
+    /// inference, and writes the SAME walk_target_q_/walk_target_valid_/walk_target_stamp_
+    /// fields walkPolicyTick() would -- publishTick() does not need to know which policy is
+    /// active.
+    void walkPolicyIsaacLabTick();
 
     void sportRequestCallback(const unitree_api::msg::Request::ConstSharedPtr& msg);
 
@@ -194,6 +208,18 @@ private:
     /// dead-man. Cleared whenever a successful SET_FSM_ID leaves Start, so releasing locomotion
     /// authority stops the robot instead of leaving the last command in force.
     std::optional<VelocityCommand> walk_velocity_{};
+
+    /// IsaacLab-sourced policy state. Mutually exclusive with the walk_policy_session_ members
+    /// above -- only one of walkPolicyTick()/walkPolicyIsaacLabTick() is ever wired to a timer,
+    /// decided once in the constructor. Shares walk_target_q_/walk_target_valid_/
+    /// walk_target_stamp_/walk_policy_enabled_ with the other path; publishTick() is unchanged.
+    IlPolicyConfig                          il_config_{};
+    std::unique_ptr<IlWalkPolicySession>    il_session_;
+    std::unique_ptr<IlObsHistory>           il_history_;
+    std::unique_ptr<IlActionDelay>          il_delay_;
+    rclcpp::TimerBase::SharedPtr            il_policy_timer_;
+    /// Previous tick's full 29-wide action (IsaacLab order), fed back into the next observation.
+    std::array<float, kIlNumJoints>         il_last_full_action_{};
 };
 
 }  // namespace g1_motion_service_sim

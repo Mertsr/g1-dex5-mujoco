@@ -223,7 +223,25 @@ MotionServiceSim::MotionServiceSim(const rclcpp::NodeOptions& options)
             sportModeStateCallback(msg);
         });
 
-    if (setUpWalkPolicy())
+    // Mutually exclusive: walker.onnx (setUpWalkPolicy) wins if both walk_policy.enabled and
+    // walk_policy_isaaclab.enabled are true. See walk_policy_isaaclab.hpp for why the two
+    // policies cannot run together -- different observation contracts, different action dims.
+    const bool walker_onnx_active = setUpWalkPolicy();
+    bool       isaaclab_active    = false;
+    if (!walker_onnx_active)
+    {
+        isaaclab_active = setUpWalkPolicyIsaacLab();
+    }
+    else if (declare_parameter("walk_policy_isaaclab.enabled", false))
+    {
+        RCLCPP_WARN(
+            get_logger(),
+            "both walk_policy.enabled and walk_policy_isaaclab.enabled are true -- walker.onnx "
+            "wins, the IsaacLab-sourced policy is not set up. Disable walk_policy.enabled in "
+            "walk_policy.yaml to use it instead.");
+    }
+
+    if (walker_onnx_active || isaaclab_active)
     {
         RCLCPP_WARN(
             get_logger(),
@@ -507,6 +525,174 @@ void MotionServiceSim::walkPolicyTick()
     }
     const auto targets = actionToJointTargets(walk_last_action_, walk_policy_config_);
     std::copy(targets.begin(), targets.begin() + kNumLowerMotors, walk_target_q_.begin());
+    walk_target_valid_ = true;
+    walk_target_stamp_ = now;
+}
+
+bool MotionServiceSim::setUpWalkPolicyIsaacLab()
+{
+    const bool il_enabled = declare_parameter("walk_policy_isaaclab.enabled", false);
+    if (!il_enabled)
+    {
+        RCLCPP_INFO(
+            get_logger(),
+            "walking policy disabled -- legs and waist stiff-hold the captured pose (neither "
+            "walk_policy.enabled nor walk_policy_isaaclab.enabled is true)");
+        return false;
+    }
+
+    const auto   model_path_param = declare_parameter("walk_policy_isaaclab.onnx_model_path", std::string{});
+    const double rate_hz          = declare_parameter("walk_policy_isaaclab.rate_hz", 50.0);
+    walk_policy_staleness_timeout_s_ =
+        declare_parameter("walk_policy_isaaclab.staleness_timeout_ms", 100.0) / 1000.0;
+
+    const auto joint_names = declare_parameter("walk_policy_isaaclab.joint_names", std::vector<std::string>{});
+    const auto default_joint_pos =
+        declare_parameter("walk_policy_isaaclab.default_joint_pos", std::vector<double>{});
+    const auto default_joint_vel =
+        declare_parameter("walk_policy_isaaclab.default_joint_vel", std::vector<double>{});
+    const auto leg_action_indices =
+        declare_parameter("walk_policy_isaaclab.leg_action_indices", std::vector<std::int64_t>{});
+    const auto arm_obs_indices =
+        declare_parameter("walk_policy_isaaclab.arm_obs_indices", std::vector<std::int64_t>{});
+    il_config_.action_scale   = declare_parameter("walk_policy_isaaclab.action_scale", 0.25);
+    il_config_.command_height = declare_parameter("walk_policy_isaaclab.command_height", 0.8);
+    const auto lower_kp       = declare_parameter("walk_policy_isaaclab.lower_kp", std::vector<double>{});
+    const auto lower_kd       = declare_parameter("walk_policy_isaaclab.lower_kd", std::vector<double>{});
+
+    if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||
+        default_joint_vel.size() != kIlNumJoints || leg_action_indices.size() != kIlNumLegs ||
+        arm_obs_indices.size() != kIlNumArmsObs || lower_kp.size() != kNumLowerMotors ||
+        lower_kd.size() != kNumLowerMotors || rate_hz <= 0.0)
+    {
+        RCLCPP_ERROR(
+            get_logger(),
+            "walk_policy_isaaclab parameters are malformed (expected %zu joint_names / "
+            "default_joint_pos / default_joint_vel, %zu leg_action_indices, %zu arm_obs_indices, "
+            "%d lower_kp/lower_kd, positive rate_hz) -- disabling the policy; legs will stiff-hold",
+            kIlNumJoints,
+            kIlNumLegs,
+            kIlNumArmsObs,
+            kNumLowerMotors);
+        return false;
+    }
+
+    std::copy(default_joint_pos.begin(), default_joint_pos.end(), il_config_.default_joint_pos.begin());
+    std::copy(default_joint_vel.begin(), default_joint_vel.end(), il_config_.default_joint_vel.begin());
+    for (std::size_t i = 0; i < kIlNumLegs; ++i)
+        il_config_.leg_action_indices[i] = static_cast<int>(leg_action_indices[i]);
+    for (std::size_t i = 0; i < kIlNumArmsObs; ++i)
+        il_config_.arm_obs_indices[i] = static_cast<int>(arm_obs_indices[i]);
+    // Reused directly by publishTick()/selectLowerBodyCommand() -- same 15-wide DDS-order
+    // field walker.onnx's path fills, see walk_policy_isaaclab.yaml's comment.
+    std::copy(lower_kp.begin(), lower_kp.end(), walk_policy_config_.lower_kp.begin());
+    std::copy(lower_kd.begin(), lower_kd.end(), walk_policy_config_.lower_kd.begin());
+
+    const std::string model_path =
+        model_path_param.empty() ?
+            ament_index_cpp::get_package_share_directory("g1_motion_service_sim") +
+                "/policy/policy.onnx" :
+            model_path_param;
+    try
+    {
+        il_session_ = std::make_unique<IlWalkPolicySession>(model_path);
+    }
+    catch (const std::exception& e)
+    {
+        RCLCPP_ERROR(
+            get_logger(),
+            "failed to load the IsaacLab walking policy from '%s' (%s) -- disabling the policy; "
+            "legs will stiff-hold",
+            model_path.c_str(),
+            e.what());
+        return false;
+    }
+
+    il_history_ = std::make_unique<IlObsHistory>();
+    il_delay_   = std::make_unique<IlActionDelay>();
+    for (std::size_t i = 0; i < kIlNumJoints; ++i)
+    {
+        il_last_full_action_[i] = static_cast<float>(il_config_.default_joint_pos[i]);
+    }
+
+    // Shared with the walker.onnx path: publishTick() only checks that SOME policy produced a
+    // fresh walk_target_q_, not which one.
+    walk_policy_enabled_ = true;
+
+    const auto policy_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / rate_hz));
+    il_policy_timer_ = create_wall_timer(policy_period, [this] { walkPolicyIsaacLabTick(); });
+
+    RCLCPP_WARN(
+        get_logger(),
+        "IsaacLab-sourced walking policy loaded from '%s' (warm-up %.1f ms), running at %.1f Hz "
+        "and owning the 12 leg motors; waist held at default, arms kept by /arm_sdk. UNVERIFIED "
+        "gains and command semantics -- see walk_policy_isaaclab.yaml's own comments before "
+        "trusting this with real motion.",
+        model_path.c_str(),
+        il_session_->warmupSeconds() * 1000.0,
+        rate_hz);
+    return true;
+}
+
+void MotionServiceSim::walkPolicyIsaacLabTick()
+{
+    // Same preconditions as walkPolicyTick(), minus /sportmodestate -- this contract has no
+    // base_lin_vel term, so it never needs that topic.
+    if (!il_session_ || !hold_pose_captured_)
+    {
+        return;
+    }
+    const auto now     = std::chrono::steady_clock::now();
+    const auto command = activeCommand(walk_velocity_, now);
+
+    IlPolicyInputs inputs{};
+    for (std::size_t il = 0; il < kIlNumJoints; ++il)
+    {
+        const auto dds        = static_cast<std::size_t>(kIlFromDds[il]);
+        inputs.joint_pos[il]  = walk_inputs_.joint_pos[dds];
+        inputs.joint_vel[il]  = walk_inputs_.joint_vel[dds];
+    }
+    inputs.base_ang_vel_body = walk_inputs_.base_ang_vel_body;
+    inputs.projected_gravity = rotateWorldToBase(walk_inputs_.base_quat, { 0.0, 0.0, -1.0 });
+    inputs.cmd_vx            = command[0];
+    inputs.cmd_vy            = command[1];
+    inputs.cmd_vyaw          = command[2];
+
+    const auto step = ilAssembleObservationStep(inputs, il_config_, il_last_full_action_);
+    il_history_->push(step);
+    const auto observation = il_history_->flatten();
+
+    std::optional<std::array<float, kIlNumLegs>> action;
+    try
+    {
+        action = il_session_->run(observation);
+    }
+    catch (...)
+    {
+        RCLCPP_ERROR_THROTTLE(
+            get_logger(),
+            *get_clock(),
+            1000,
+            "IsaacLab walking policy inference threw -- skipping this tick; leaving the freshness "
+            "stamp untouched so the stiff-hold fallback engages if it keeps failing");
+        return;
+    }
+
+    il_last_full_action_   = ilBuildFullAction(*action, il_config_);
+    const auto leg_targets = ilActionToLegTargets(*action, il_config_);  // policy-output order
+    const auto delayed     = il_delay_->pushAndPop(leg_targets);        // same order, delayed
+
+    for (std::size_t i = 0; i < kIlNumLegs; ++i)
+    {
+        walk_target_q_[static_cast<std::size_t>(kLegActionToDds[i])] = delayed[i];
+    }
+    // Waist (DDS 12-14): never commanded by this policy, held at its IsaacLab default
+    // (joint_names indices 2, 5, 8 = waist_yaw, waist_roll, waist_pitch).
+    walk_target_q_[12] = il_config_.default_joint_pos[2];
+    walk_target_q_[13] = il_config_.default_joint_pos[5];
+    walk_target_q_[14] = il_config_.default_joint_pos[8];
+
     walk_target_valid_ = true;
     walk_target_stamp_ = now;
 }

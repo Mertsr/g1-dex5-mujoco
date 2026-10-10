@@ -49,6 +49,25 @@ target_include_directories(walk_policy_session PUBLIC
 target_compile_features(walk_policy_session PUBLIC cxx_std_20)
 target_link_libraries(walk_policy_session walk_policy ${ONNXRUNTIME_LIBRARY})
 
+# IsaacLab-sourced walking policy (unitree_sim_isaaclab) observation/action math -- separate
+# contract from walk_policy, see walk_policy_isaaclab.hpp. Pure C++, no ROS or ONNX.
+add_library(walk_policy_isaaclab src/walk_policy_isaaclab.cpp)
+target_include_directories(walk_policy_isaaclab PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(walk_policy_isaaclab PUBLIC cxx_std_20)
+
+# ONNX Runtime session wrapper for the IsaacLab-sourced policy, mirrors walk_policy_session.
+add_library(walk_policy_isaaclab_session src/walk_policy_isaaclab_session.cpp)
+target_include_directories(walk_policy_isaaclab_session PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${ONNXRUNTIME_INCLUDE_DIR}
+)
+target_compile_features(walk_policy_isaaclab_session PUBLIC cxx_std_20)
+target_link_libraries(walk_policy_isaaclab_session walk_policy_isaaclab ${ONNXRUNTIME_LIBRARY})
+
 # Sim-only FSM legality table for /api/sport/request.
 add_library(loco_fsm src/loco_fsm.cpp)
 target_include_directories(loco_fsm PUBLIC
@@ -70,6 +89,7 @@ target_link_libraries(motion_service_sim
   blend_math
   loco_fsm
   walk_policy_session
+  walk_policy_isaaclab_session
   g1_hardware_interface::g1_arm_sdk_system
   nlohmann_json::nlohmann_json
 )
@@ -82,6 +102,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(loco_fsm PRIVATE -Wall -Wextra)
   target_compile_options(walk_policy PRIVATE -Wall -Wextra)
   target_compile_options(walk_policy_session PRIVATE -Wall -Wextra)
+  target_compile_options(walk_policy_isaaclab PRIVATE -Wall -Wextra)
+  target_compile_options(walk_policy_isaaclab_session PRIVATE -Wall -Wextra)
 endif()
 
 # blend_math is internal (statically linked) — no install rule.
@@ -113,6 +135,10 @@ if(BUILD_TESTING)
   # Walking policy wire contract tests — no ONNX Runtime needed.
   ament_add_gmock(test_walk_policy test/test_walk_policy.cpp)
   target_link_libraries(test_walk_policy walk_policy)
+
+  # IsaacLab-sourced walking policy wire contract tests — no ONNX Runtime needed.
+  ament_add_gmock(test_walk_policy_isaaclab test/test_walk_policy_isaaclab.cpp)
+  target_link_libraries(test_walk_policy_isaaclab walk_policy_isaaclab)
 
   # The wire constants this package duplicates from g1_hardware_interface. Only the test
   # links that package, so blend_math keeps its lean dependency footprint.
