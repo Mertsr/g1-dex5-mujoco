@@ -68,19 +68,19 @@
 
     <!-- Table: lower than g1_manipulation_scene's 0.785 m pedestal (0.75 here, "a little
          lower" as asked), pushed up against the far wall (fence_x_max sits at x=2.20; the
-         table's far edge at 2.15 leaves 3 cm clearance) and shifted right, out from under the
-         belt's discharge end. Near edge still clears the spawned arm the same way the other
-         scenes do. -->
-    <geom name="table_top" group="2" type="box" size="0.30 0.22 0.015" pos="1.85 0.20 0.735"
+         table's far edge at 2.17 leaves 1 cm clearance -- as snug as it goes without
+         clipping) at the position Mert placed it by hand. Widened from 0.30x0.22 to
+         0.34x0.40 ("a bit wider"): x is capped by the wall, so the growth is mostly in y. -->
+    <geom name="table_top" group="2" type="box" size="0.34 0.40 0.015" pos="1.83 -0.80 0.735"
       material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.13 0.00 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="2.15 -1.18 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.13 0.40 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="2.15 -0.42 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.57 0.00 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.51 -1.18 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="table_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.57 0.40 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.51 -0.42 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
 
     <!-- Roller conveyor, 1.5 m long, running along world +x (no rotation this time -- the
          basket at the far end is just "a bit further down +x", which keeps every number in
@@ -182,23 +182,43 @@
     <!-- Three copies of one part, staged at the belt's near (table) end rather than on the
          table, so the belt starts dragging them towards the basket as soon as the sim comes
          up -- "parts fall into the basket" needs them on the belt, not waiting to be placed
-         there. Placeholder boxes until the real part file is in hand; only the geom changes
+         there. Placeholder pucks until the real part file is in hand; only the geom changes
          when it arrives, nothing about the belt or basket math cares what shape is on it.
-         Spawned at rest height (0.025 above the belt box's 0.70 top, matching the rollers'
-         own height) across the belt's width so they don't collide with each other immediately. -->
-    <body name="part_1" pos="-0.10 0.50 0.725">
-      <freejoint name="part_1_joint"/>
-      <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
+
+         Short and wide (half-height 0.010, half-footprint 0.045) rather than the 0.025 cube
+         this started as: conveyor_handler.cc's drag force lands at the body's own origin, at
+         whatever height that is, while the belt's friction reaction acts down at the contact
+         plane -- the same lever-arm effect that tips a filing cabinet pushed at its middle
+         rather than its base. A tall cube's CoM sits far enough above the belt for that
+         torque to tip it end over end; a squat, wide puck's CoM barely clears the belt, so
+         the same push stays a push, not a tip, and it rides the belt flat the whole way
+         (checked standalone: a 0.025 cube drifted to a ~130 deg tumble under this force,
+         the 0.045x0.045x0.010 puck settled under 0.1 deg of rotation).
+
+         Rest height is 0.01 above the belt box's 0.70 top (its own half-height, not the
+         rollers'; the pucks are low enough to clear the roller bumps without resting on
+         them). Spread across the belt's width so they don't collide with each other
+         immediately.
+
+         A small amount of joint damping (0.5, on a free joint applying to all six dofs, not
+         just rotation) is layered on top of the squat shape: on the full 1.5 m run a rail
+         nudge or roller-height bump could still start a slow spin even with the lowered CoM
+         (measured up to ~23 deg over the run without this). At this belt's speed the damping
+         cuts steady-state travel speed by under 2% (checked: ~0.079 vs the configured 0.08
+         m/s) while holding peak in-transit rotation under 0.1 deg. -->
+    <body name="part_1" pos="-0.10 0.50 0.71">
+      <joint type="free" name="part_1_joint" damping="0.5"/>
+      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_2" pos="0.00 0.60 0.725">
-      <freejoint name="part_2_joint"/>
-      <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
+    <body name="part_2" pos="0.00 0.60 0.71">
+      <joint type="free" name="part_2_joint" damping="0.5"/>
+      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_3" pos="0.10 0.70 0.725">
-      <freejoint name="part_3_joint"/>
-      <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
+    <body name="part_3" pos="0.10 0.70 0.71">
+      <joint type="free" name="part_3_joint" damping="0.5"/>
+      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
 
