@@ -1,6 +1,7 @@
 <mujoco model="g1_conveyor_scene">
-  <!-- Mert's own world: a workbench table in front of the robot, a conveyor belt beside it,
-       and three copies of one part sitting on the table.
+  <!-- Mert's own world: a low workbench table a short walk from a 1.5 m roller conveyor, the
+       belt feeding into an open basket at its far end, inside a room bounded by chain-link-
+       style fencing on all four sides.
 
        A brand-new scene rather than a change to g1_manipulation_scene.xml, so nothing that
        measures against that scene (its pedestal height, its cube pose, its grasp welds)
@@ -14,7 +15,7 @@
        Staged into the vendored model directory at launch, so relative includes resolve. -->
   <include file="g1_29dof.xml"/>
 
-  <statistic center="0 0 0.5" extent="2.2"/>
+  <statistic center="0.6 0 0.6" extent="3.0"/>
 
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
@@ -31,58 +32,147 @@
       reflectance="0.2"/>
     <material name="pedestal_mat" rgba="0.35 0.38 0.42 1"/>
     <material name="belt_mat" rgba="0.12 0.12 0.12 1"/>
+    <material name="roller_mat" rgba="0.75 0.77 0.80 1" specular="0.9" shininess="0.95"/>
+    <material name="rail_mat" rgba="0.55 0.56 0.58 1" specular="0.5" shininess="0.6"/>
+    <material name="basket_mat" rgba="0.45 0.30 0.12 1" specular="0.1" shininess="0.1"/>
     <material name="mat_part" rgba="0.85 0.55 0.1 1" specular="0.5" shininess="0.6"/>
+
+    <!-- Stand-in for chain-link/wire-mesh fencing. MuJoCo has no wire-lattice primitive, so a
+         fine checker texture at high repeat plus partial alpha is used on plain wall geoms
+         instead of hundreds of individual wire-bar geoms; from any normal viewing distance it
+         reads as mesh fencing rather than a solid wall, which is the point. Swap this for a
+         literal bar lattice later if a close-up, physically-accurate fence ever matters. -->
+    <texture type="2d" name="fence_tex" builtin="checker" mark="none" rgb1="0.55 0.56 0.58"
+      rgb2="0.70 0.71 0.73" width="64" height="64"/>
+    <material name="fence_mat" texture="fence_tex" texuniform="true" texrepeat="60 20"
+      rgba="1 1 1 0.55" specular="0.3" shininess="0.3"/>
   </asset>
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <light pos="1.2 -0.3 1.8" dir="0 0 -1" directional="true"/>
     <geom name="floor" group="2" size="0 0 0.05" type="plane" material="groundplane"/>
 
-    <!-- Table: same 0.75 m-ish workbench height convention as g1_manipulation_scene, near
-         edge clear of the spawned arm the same way (x 0.26, 8 cm past where the right palm
-         hangs at spawn). Top at 0.80, legs centred under the corners. -->
-    <geom name="table_top" group="2" type="box" size="0.30 0.22 0.015" pos="0.56 -0.10 0.785"
+    <!-- Perimeter fencing. A simple rectangular room, large enough that the table, belt and
+         basket below (max extent roughly x -0.2..1.7, y -0.4..0.9) sit well inside it with
+         room to walk the robot around. contype/conaffinity on, like real safety fencing: the
+         room is a physical boundary, not just a backdrop. -->
+    <geom name="fence_x_min" group="2" type="box" size="0.02 1.30 0.75" pos="-1.00 0 0.75"
+      material="fence_mat" contype="1" conaffinity="1"/>
+    <geom name="fence_x_max" group="2" type="box" size="0.02 1.30 0.75" pos="2.20 0 0.75"
+      material="fence_mat" contype="1" conaffinity="1"/>
+    <geom name="fence_y_min" group="2" type="box" size="1.60 0.02 0.75" pos="0.60 -1.30 0.75"
+      material="fence_mat" contype="1" conaffinity="1"/>
+    <geom name="fence_y_max" group="2" type="box" size="1.60 0.02 0.75" pos="0.60 1.30 0.75"
+      material="fence_mat" contype="1" conaffinity="1"/>
+
+    <!-- Table: lower than g1_manipulation_scene's 0.785 m pedestal (0.75 here, "a little
+         lower" as asked) and pulled in close enough to the belt (0.325 m of open floor
+         between the table's near edge and the belt's near rail) to cover on foot rather than
+         needing to navigate. Near edge still clears the spawned arm the same way the other
+         scenes do. -->
+    <geom name="table_top" group="2" type="box" size="0.30 0.22 0.015" pos="0.55 -0.10 0.735"
       material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_near" group="2" type="box" size="0.02 0.02 0.385"
-      pos="0.84 -0.30 0.385" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_far" group="2" type="box" size="0.02 0.02 0.385"
-      pos="0.84 0.10 0.385" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_near2" group="2" type="box" size="0.02 0.02 0.385"
-      pos="0.28 -0.30 0.385" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_far2" group="2" type="box" size="0.02 0.02 0.385"
-      pos="0.28 0.10 0.385" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="table_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="0.83 -0.30 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="table_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="0.83 0.10 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="table_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="0.27 -0.30 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="table_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="0.27 0.10 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
 
-    <!-- Conveyor belt: a static box beside the table, its own frame rotated 90 deg about z so
-         its local +x (the drag direction conveyor_handler.cc reads from its pose) runs
-         roughly parallel to the table's near edge, feeding past it. Top surface at the same
-         0.80 as the table, so a part dragged off the table and onto the belt doesn't fall
-         before it's picked up by the drag zone, and vice versa.
+    <!-- Roller conveyor, 1.5 m long, running along world +x (no rotation this time -- the
+         basket at the far end is just "a bit further down +x", which keeps every number in
+         this block in one frame instead of two). Top surface at 0.70, a little below the
+         table, matching a real roller conveyor sitting lower than a workbench.
 
-         `conveyor_belt` is a naming-convention match, not a hardcoded id: grove-g1's
-         conveyor_handler.cc (workspace/vendor/unitree_mujoco/) discovers any geom named
-         exactly this or `conveyor_belt_<anything>` and drives free bodies resting on it,
-         purely from GROVE_G1_SENSOR_CONFIG's `conveyor:` section -- see sim_sensors.yaml. -->
-    <body name="conveyor_belt" pos="0.56 -0.55 0.75" euler="0 0 90">
-      <geom name="conveyor_belt" group="2" type="box" size="0.45 0.14 0.05" material="belt_mat"
+         `conveyor_belt` is the geom grove-g1's conveyor_handler.cc actually drives: a plain
+         box, matched by name (exact, or `conveyor_belt_<anything>` for more than one belt).
+         It is kept thin and dark rather than hidden, so it still reads as "the belt surface"
+         under the rollers. The rollers themselves (below) are a visual layer on top of it and
+         carry no physics of their own -- the box is what parts actually rest and drag on, so
+         the drag math in conveyor_handler.cc only ever has one geom to reason about. -->
+    <body name="conveyor_belt" pos="0.55 0.60 0.67" euler="0 0 0">
+      <geom name="conveyor_belt" group="2" type="box" size="0.75 0.175 0.03" material="belt_mat"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
 
-    <!-- Three copies of one part on the table. Placeholder boxes until the real part file is
-         in hand -- geometry only, swap the geom (and, if it stops being a box, resolve() in
-         conveyor_handler.cc doesn't care, since only the belt geom itself must stay a box)
-         once it arrives. Spawned at rest height (half-height 0.025 above the 0.80 top) so
-         they settle instead of bouncing, spaced along the table's reachable near edge. -->
-    <body name="part_1" pos="0.42 -0.14 0.825">
+    <!-- Side rails: raised guide rails along both edges, the length of the belt, both so a
+         part can't wander off the side and so the conveyor reads as a conveyor rather than a
+         bare plank. contype on: they are meant to contain parts, same as the real thing. -->
+    <geom name="conveyor_rail_near" group="2" type="box" size="0.75 0.01 0.05"
+      pos="0.55 0.415 0.75" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_rail_far" group="2" type="box" size="0.75 0.01 0.05"
+      pos="0.55 0.785 0.75" material="rail_mat" contype="1" conaffinity="1"/>
+
+    <!-- 14 rollers across the 1.5 m length, visual only (contype 0 -- the belt box under them
+         carries the actual contact). Each is a cylinder laid across the belt's width with
+         `fromto`, rather than a body + default z-aligned cylinder, so there is no per-roller
+         orientation to get wrong. Centres sit 0.025 above the belt box's own top (0.70), which
+         is also where a resting part's bottom face ends up once it settles between them. -->
+    <geom name="roller_01" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="-0.125 0.445 0.725  -0.125 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_02" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="-0.025 0.445 0.725  -0.025 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_03" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.075 0.445 0.725  0.075 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_04" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.175 0.445 0.725  0.175 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_05" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.275 0.445 0.725  0.275 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_06" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.375 0.445 0.725  0.375 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_07" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.475 0.445 0.725  0.475 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_08" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.575 0.445 0.725  0.575 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_09" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.675 0.445 0.725  0.675 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_10" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.775 0.445 0.725  0.775 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_11" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.875 0.445 0.725  0.875 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_12" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="0.975 0.445 0.725  0.975 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_13" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="1.075 0.445 0.725  1.075 0.755 0.725" contype="0" conaffinity="0"/>
+    <geom name="roller_14" group="2" type="cylinder" size="0.025" material="roller_mat"
+      fromto="1.175 0.445 0.725  1.175 0.755 0.725" contype="0" conaffinity="0"/>
+
+    <!-- Basket at the belt's discharge end (belt's far edge is at x = 0.55 + 0.75 = 1.30).
+         Open on the belt-facing side on purpose: conveyor_handler.cc stops dragging a part the
+         instant it crosses the belt box's own edge, so from there it is a short, nearly-flat
+         toss off the end -- a facing wall would just be something for it to clip on the way
+         in. Floor sits 0.29 m below the belt top, which is enough drop that a part lands
+         inside rather than skimming the lip. -->
+    <geom name="basket_floor" group="2" type="box" size="0.18 0.20 0.01" pos="1.48 0.60 0.40"
+      material="basket_mat" contype="1" conaffinity="1"/>
+    <geom name="basket_wall_far" group="2" type="box" size="0.01 0.20 0.15" pos="1.66 0.60 0.56"
+      material="basket_mat" contype="1" conaffinity="1"/>
+    <geom name="basket_wall_near" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.41 0.56"
+      material="basket_mat" contype="1" conaffinity="1"/>
+    <geom name="basket_wall_far2" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.79 0.56"
+      material="basket_mat" contype="1" conaffinity="1"/>
+
+    <!-- Three copies of one part, staged at the belt's near (table) end rather than on the
+         table, so the belt starts dragging them towards the basket as soon as the sim comes
+         up -- "parts fall into the basket" needs them on the belt, not waiting to be placed
+         there. Placeholder boxes until the real part file is in hand; only the geom changes
+         when it arrives, nothing about the belt or basket math cares what shape is on it.
+         Spawned at rest height (0.025 above the belt box's 0.70 top, matching the rollers'
+         own height) across the belt's width so they don't collide with each other immediately. -->
+    <body name="part_1" pos="-0.10 0.50 0.725">
       <freejoint name="part_1_joint"/>
       <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_2" pos="0.56 -0.14 0.825">
+    <body name="part_2" pos="0.00 0.60 0.725">
       <freejoint name="part_2_joint"/>
       <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_3" pos="0.70 -0.14 0.825">
+    <body name="part_3" pos="0.10 0.70 0.725">
       <freejoint name="part_3_joint"/>
       <geom group="2" type="box" size="0.025 0.025 0.025" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
