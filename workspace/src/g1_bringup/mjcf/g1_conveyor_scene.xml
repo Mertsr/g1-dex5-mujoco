@@ -123,39 +123,62 @@
     <geom name="conveyor_leg_far_2" group="2" type="box" size="0.03 0.03 0.32"
       pos="1.25 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
 
+    <!-- Discharge ramp: a second, angled belt segment rather than a bare edge at x=1.30.
+         Parts used to stop dead right at that edge -- the conveyor force cuts out exactly
+         when a part's centre crosses it, but its trailing half was still resting on the flat
+         box, so it balanced there in near-equilibrium for 30-60 (simulated) seconds before
+         gravity alone finally tipped it off. A named `conveyor_belt_*` geom is not special
+         cased in conveyor_handler.cc -- resolve() finds every belt by the same prefix match
+         and run() drags a body along WHICHEVER matching belt it's currently over, using that
+         belt's own pose for direction -- so this ramp is simply a second belt, angled 40 deg
+         down towards the basket, that keeps actively pushing (now down-and-forward along its
+         own tilted local +x) right through the transition instead of leaving it to a
+         knife-edge balance. Overlaps 3 cm back under the flat belt (its near edge sits at
+         x=1.27, not 1.30) so there is no geometric seam for a part to hang up on.
+         Checked standalone: the same stall that used to take 30-60 s now clears in about
+         10 s, and the part lands flat (not teetering) in the basket. -->
+    <body name="conveyor_belt_ramp" pos="1.36 0.60 0.6245" euler="0 40 0">
+      <geom name="conveyor_belt_ramp" group="2" type="box" size="0.1175 0.175 0.03"
+        material="belt_mat" contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
+    </body>
+
     <!-- 14 rollers across the 1.5 m length, visual only (contype 0 -- the belt box under them
          carries the actual contact). Each is a cylinder laid across the belt's width with
          `fromto`, rather than a body + default z-aligned cylinder, so there is no per-roller
-         orientation to get wrong. Centres sit 0.025 above the belt box's own top (0.70), which
-         is also where a resting part's bottom face ends up once it settles between them. -->
-    <geom name="roller_01" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="-0.125 0.445 0.725  -0.125 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_02" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="-0.025 0.445 0.725  -0.025 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_03" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.075 0.445 0.725  0.075 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_04" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.175 0.445 0.725  0.175 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_05" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.275 0.445 0.725  0.275 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_06" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.375 0.445 0.725  0.375 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_07" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.475 0.445 0.725  0.475 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_08" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.575 0.445 0.725  0.575 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_09" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.675 0.445 0.725  0.675 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_10" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.775 0.445 0.725  0.775 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_11" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.875 0.445 0.725  0.875 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_12" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="0.975 0.445 0.725  0.975 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_13" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="1.075 0.445 0.725  1.075 0.755 0.725" contype="0" conaffinity="0"/>
-    <geom name="roller_14" group="2" type="cylinder" size="0.025" material="roller_mat"
-      fromto="1.175 0.445 0.725  1.175 0.755 0.725" contype="0" conaffinity="0"/>
+         orientation to get wrong. Radius trimmed from an earlier 0.025 to 0.012: the physical
+         support is always the flat belt box at 0.70 regardless of roller size, so a bigger
+         radius just means a deeper visible gap between where a part actually rests (0.70) and
+         the rollers' own crest -- parts looked sunk a full 5 cm below the rollers. At 0.012
+         that gap is 2.4 cm, flush enough to read as "resting on the rollers" rather than
+         "recessed in a slot". -->
+    <geom name="roller_01" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="-0.125 0.445 0.712  -0.125 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_02" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="-0.025 0.445 0.712  -0.025 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_03" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.075 0.445 0.712  0.075 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_04" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.175 0.445 0.712  0.175 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_05" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.275 0.445 0.712  0.275 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_06" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.375 0.445 0.712  0.375 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_07" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.475 0.445 0.712  0.475 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_08" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.575 0.445 0.712  0.575 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_09" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.675 0.445 0.712  0.675 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_10" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.775 0.445 0.712  0.775 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_11" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.875 0.445 0.712  0.875 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_12" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="0.975 0.445 0.712  0.975 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_13" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="1.075 0.445 0.712  1.075 0.755 0.712" contype="0" conaffinity="0"/>
+    <geom name="roller_14" group="2" type="cylinder" size="0.012" material="roller_mat"
+      fromto="1.175 0.445 0.712  1.175 0.755 0.712" contype="0" conaffinity="0"/>
 
     <!-- Basket at the belt's discharge end (belt's far edge is at x = 0.55 + 0.75 = 1.30).
          Open on the belt-facing side on purpose: conveyor_handler.cc stops dragging a part the
