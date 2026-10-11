@@ -23,6 +23,14 @@
       # which the policy never saw and which made it chase its own corrections and fall.
       action_delay_steps: 0
 
+      # Seconds of exactly-zero command after which the policy's observation history and last
+      # action are cleared once, recreating its startup condition. Observed in sim: the policy
+      # stands still from startup, but after a Nav2 goal it sometimes keeps stepping in place at
+      # zero command -- the gait lives in its 10-step history. Re-armed by the next non-zero
+      # command. <= 0 disables it. If the reset itself makes the robot stumble, raise this so
+      # it fires later, once the stepping has had a chance to die down on its own.
+      stand_reset_after_s: 1.0
+
       # All 29 joints, IsaacLab runtime order -- MEASURED from a live environment dump, not
       # transcribed from a config file. Also used to size default_joint_pos/vel below.
       joint_names:

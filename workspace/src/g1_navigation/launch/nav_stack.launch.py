@@ -128,5 +128,11 @@ def generate_launch_description():
             "a single node is crashing and you need to see which.",
         ),
         DeclareLaunchArgument("container_name", default_value="nav2_container"),
+        DeclareLaunchArgument(
+            "walk_policy",
+            default_value="walker",
+            description="Must match sim.launch.py's walk_policy:. Inherited by nav2.launch.py, "
+            "where it picks the gait shaper profile ('isaaclab' -> g1_gait_shaper_isaaclab.yaml).",
+        ),
         OpaqueFunction(function=_setup),
     ])

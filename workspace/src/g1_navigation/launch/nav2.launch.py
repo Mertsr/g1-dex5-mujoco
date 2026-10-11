@@ -39,7 +39,7 @@ from launch.actions import (
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.events import matches_action
 from launch.events.process import ShutdownProcess
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.descriptions import ParameterFile
 from launch_ros.event_handlers import OnStateTransition
@@ -178,12 +178,20 @@ def generate_launch_description():
 
     # Not composed: making it a component would add rclcpp_components to g1_locomotion, the
     # package that has to survive to hardware, for no benefit -- nothing here is intra-process.
+    # The shaper's engage thresholds are a property of the walking policy, so the profile
+    # follows sim.launch.py's walk_policy: argument. walker (and none) keep g1_gait_shaper.yaml.
+    walker_shaper = os.path.join(loco_share, "config", "g1_gait_shaper.yaml")
+    isaaclab_shaper = os.path.join(loco_share, "config", "g1_gait_shaper_isaaclab.yaml")
+    shaper_params = PythonExpression([
+        "'", isaaclab_shaper, "' if '", LaunchConfiguration("walk_policy"),
+        "'.strip().lower() == 'isaaclab' else '", walker_shaper, "'",
+    ])
     gait_shaper = Node(
         package="g1_locomotion",
         executable="g1_gait_shaper",
         name="g1_gait_shaper",
         output="both",
-        parameters=[os.path.join(loco_share, "config", "g1_gait_shaper.yaml")],
+        parameters=[shaper_params],
         remappings=[
             ("cmd_vel_in", "/cmd_vel"),
             ("cmd_vel_override", "/cmd_vel_approach"),
@@ -285,6 +293,14 @@ def generate_launch_description():
             description="Full path to the parameters file for all launched nodes.",
         ),
         DeclareLaunchArgument("autostart", default_value="true"),
+        DeclareLaunchArgument(
+            "walk_policy",
+            default_value="walker",
+            description="Must match sim.launch.py's walk_policy:. Picks g1_gait_shaper's "
+            "profile: 'isaaclab' loads g1_gait_shaper_isaaclab.yaml (near-zero engage "
+            "thresholds, that policy tracks slow commands); anything else loads "
+            "g1_gait_shaper.yaml (walker.onnx's measured dead zone).",
+        ),
         DeclareLaunchArgument(
             "use_composition",
             default_value="false",

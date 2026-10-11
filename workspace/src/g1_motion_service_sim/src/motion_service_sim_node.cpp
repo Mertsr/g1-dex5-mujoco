@@ -563,6 +563,7 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     // called). Clamped to kIlMaxDelaySteps by IlActionDelay itself.
     const auto action_delay_steps =
         declare_parameter("walk_policy_isaaclab.action_delay_steps", std::int64_t{ 0 });
+    il_stand_reset_after_s_ = declare_parameter("walk_policy_isaaclab.stand_reset_after_s", 1.0);
 
     if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||
         default_joint_vel.size() != kIlNumJoints || leg_action_indices.size() != kIlNumLegs ||
@@ -653,6 +654,37 @@ void MotionServiceSim::walkPolicyIsaacLabTick()
     }
     const auto now     = std::chrono::steady_clock::now();
     const auto command = activeCommand(walk_velocity_, now);
+
+    // Stand reset -- see il_stand_reset_after_s_. The bridge sends an exact SetVelocity(0,0,0)
+    // when Nav2 goes quiet, so "zero" is a tight band, not a planner deadband.
+    constexpr double kZeroCmd = 1e-3;
+    const bool       zero_cmd = std::abs(command[0]) < kZeroCmd && std::abs(command[1]) < kZeroCmd &&
+                          std::abs(command[2]) < kZeroCmd;
+    if (!zero_cmd)
+    {
+        il_zero_cmd_since_.reset();
+        il_stand_reset_done_ = false;
+    }
+    else
+    {
+        if (!il_zero_cmd_since_)
+        {
+            il_zero_cmd_since_ = now;
+        }
+        if (il_stand_reset_after_s_ > 0.0 && !il_stand_reset_done_ &&
+            now - *il_zero_cmd_since_ >= std::chrono::duration<double>(il_stand_reset_after_s_))
+        {
+            il_history_->reset();
+            il_delay_->reset();
+            il_last_full_action_ = {};
+            il_stand_reset_done_ = true;
+            RCLCPP_INFO(
+                get_logger(),
+                "IsaacLab policy: command zero for %.1f s -- cleared observation history and last "
+                "action so the policy settles from a standing start",
+                il_stand_reset_after_s_);
+        }
+    }
 
     IlPolicyInputs inputs{};
     for (std::size_t il = 0; il < kIlNumJoints; ++il)

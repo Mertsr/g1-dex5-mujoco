@@ -216,6 +216,7 @@ def _setup(context, *args, **kwargs):
         "odometry": LaunchConfiguration("odometry"),
         "headless": LaunchConfiguration("headless"),
         "pin_pelvis": "true" if pin_pelvis else "false",
+        "walk_policy": LaunchConfiguration("walk_policy"),
         "waist_hold_rad": LaunchConfiguration("waist_hold_rad"),
         "sim_start_delay_s": delay,
         # We own RViz, below. Without this the simulator opens its own on the wrong config.
@@ -249,6 +250,9 @@ def _setup(context, *args, **kwargs):
                 launch_arguments={
                     "mode": mode,
                     "nav": "true" if want_nav else "false",
+                    # Same value sim.launch.py gets: the gait shaper's profile has to match the
+                    # policy actually driving the legs.
+                    "walk_policy": LaunchConfiguration("walk_policy"),
                 }.items(),
             )
         )
@@ -431,6 +435,14 @@ def generate_launch_description():
             default_value="25.0",
             description="Seconds to wait before the automatic activation. The component has to "
             "be loaded and /lowstate flowing first; too early and activate_arm fails loudly.",
+        ),
+        DeclareLaunchArgument(
+            "walk_policy",
+            default_value="walker",
+            description="Which walking policy drives the legs: 'walker' (walker.onnx), "
+            "'isaaclab' (the unitree_sim_isaaclab-trained policy.onnx) or 'none'. Forwarded to "
+            "sim.launch.py, and to the navigation stack so the gait shaper loads the matching "
+            "profile.",
         ),
         DeclareLaunchArgument(
             "waist_hold_rad",

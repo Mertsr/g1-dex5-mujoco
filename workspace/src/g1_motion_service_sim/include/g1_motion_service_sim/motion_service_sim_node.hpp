@@ -220,6 +220,15 @@ private:
     rclcpp::TimerBase::SharedPtr            il_policy_timer_;
     /// Previous tick's full 29-wide action (IsaacLab order), fed back into the next observation.
     std::array<float, kIlNumJoints>         il_last_full_action_{};
+
+    /// Stand reset. The policy stands still from a fresh start (empty history, zero last
+    /// action) but, once walking, often keeps stepping in place at a zero command -- its history
+    /// holds the gait. After the command has been zero for il_stand_reset_after_s_, the history,
+    /// last action and delay queue are cleared ONCE, recreating that startup condition. Re-armed
+    /// by the next non-zero command. <= 0 disables it.
+    double                                               il_stand_reset_after_s_{ 1.0 };
+    std::optional<std::chrono::steady_clock::time_point> il_zero_cmd_since_{};
+    bool                                                 il_stand_reset_done_{ false };
 };
 
 }  // namespace g1_motion_service_sim
