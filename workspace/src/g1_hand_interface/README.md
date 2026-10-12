@@ -80,8 +80,13 @@ and arming it would stop the fingers a second after any hiccup in the control lo
 `workspace/vendor/unitree_mujoco/dex3_handler.cc` (the file keeps its name for now) for what the
 responder does.
 
-Finger contact is not simulated: the geometry is visual only, and grasping is modelled by
-attaching the object in MoveIt's planning scene.
+The simulated hand collides: every hand body has a convex-hull collision geom (patch 003), so it
+stops at walls and holds objects by friction between the finger hulls and the object. The
+contact is only as good as `g1_description/meshes/rh56e2/`: with the checked-in placeholder STLs
+the hulls are tiny tetrahedra and the hand effectively does not collide. `grasp_weld` can still
+weld a fully closed hand to its object as an assist; with contact on, a hand closing on a large
+object stops on its surface and may never reach the weld's closure threshold, so the grip is
+then friction alone. MoveIt still models a held object by attaching it in its planning scene.
 
 ## Not yet verified
 

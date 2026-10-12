@@ -3,12 +3,13 @@
 
 // Makes a closed RH56E2 hand actually hold a scene object in MuJoCo.
 //
-// SIMULATION ONLY, and a stand-in rather than a model of anything. The finger geoms are
-// deliberately contact-free (patch 003: grasping is modelled by attaching the object to the
-// arm in MoveIt's planning scene, and tuned multi-finger contact is its own project), so
-// without this the object simply stays on the table while the planner believes it is held.
-// This closes that gap by welding the object to the palm once the hand has measurably closed
-// around it.
+// SIMULATION ONLY, and a stand-in rather than a model of anything. Originally the finger geoms
+// were contact-free and this weld was the only way a simulated hand held anything. Patch 003
+// now gives the hand convex-hull collision geoms, so a closed hand holds an object by friction
+// on its own; this weld remains as an assist that locks the object to the palm once the hand
+// has measurably closed around it. With contact on, fingers closing on a large object stop on
+// its surface and may never reach close_fraction, in which case the weld never engages and
+// the grip is friction alone. Disable it (grasp_weld.enabled: false) to test pure contact.
 //
 // On hardware the mechanism is friction between real finger pads and a real object, and this
 // file never runs. Its thresholds therefore do NOT transfer: capture_radius_m, close_fraction

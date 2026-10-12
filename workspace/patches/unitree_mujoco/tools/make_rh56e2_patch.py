@@ -21,6 +21,9 @@ What it does to g1_29dof.xml:
     follow their drivers;
   * puts the wrist links' inertials back to the URDF's own, since the stock model lumped the
     rubber hand's mass into them;
+  * gives every hand body a collision geom (its mesh's convex hull) so the hand stops at walls
+    and can hold objects by friction, and excludes the flange-mounted bodies from colliding
+    with the wrist links they sit against;
   * scales the hand to a simulator-only mass. See the patch header, which is written here.
 """
 
@@ -54,6 +57,16 @@ both with the real body tree: {bodies} bodies per hand, {joints} hinge joints, o
 driven and {mimic} follow a driver through a joint equality constraint (the URDF's <mimic> tags,
 with the same multipliers). The meshes are loaded from meshes/rh56e2/{{left,right}}/, which the
 image build copies in from g1_description/meshes/rh56e2/.
+
+THE HAND COLLIDES. Every hand body carries a second geom of class rh56e2_collision: the same
+mesh, collided as its convex hull, hidden in group 3. It contacts the world, scene objects and
+the rest of the robot, never another hand geom (bitmask, see the class), and the bodies bolted
+to the flange are excluded from the two wrist links. So the hand stops at a wall instead of
+passing through it, and a closed hand holds an object by friction. grasp_weld still runs when
+its config enables it; with contact on, a hand that closes on a large object stops on its
+surface and may never reach the weld's closure threshold, so the grip is then friction alone.
+The collision is only as good as the meshes: with g1_description's placeholder STLs (tiny
+tetrahedra) the hulls are tiny too and the hand effectively still does not collide.
 
 NO ACTUATORS AND NO SENSORS, which is not an oversight. RobotBridge sets
 num_motor_ = mj_model_->nu and then indexes lowcmd->msg_.motor_cmd()[i], a fixed
@@ -214,7 +227,13 @@ def collect_hand(urdf, side):
 
 
 # ---------------------------------------------------------------- MJCF emission
-def emit_body(urdf, joint, scale, depth, lines, joints_out, mesh_out):
+def emit_body(urdf, joint, scale, depth, lines, joints_out, mesh_out, rigid_out, rigid=True):
+    """Emits one hand body and its subtree.
+
+    `rigid` is True while no revolute joint lies between this body and the palm frame; those
+    bodies are bolted to the wrist flange and are collected in `rigid_out` so the wrist can be
+    excluded from colliding with them.
+    """
     child = joint.find("child").get("link")
     origin = joint.find("origin")
     xyz = floats(origin.get("xyz") if origin is not None else None)
@@ -236,6 +255,7 @@ def emit_body(urdf, joint, scale, depth, lines, joints_out, mesh_out):
         )
 
     if joint.get("type") == "revolute":
+        rigid = False
         limit = joint.find("limit")
         axis = floats(joint.find("axis").get("xyz"))
         norm = math.sqrt(sum(a * a for a in axis))
@@ -252,16 +272,22 @@ def emit_body(urdf, joint, scale, depth, lines, joints_out, mesh_out):
         lines.append(
             f'{pad}  <geom class="rh56e2_visual" mesh="{child}" rgba="{vec(visual["rgba"])}" />'
         )
+        # Same mesh, collided as its convex hull. Separate from the visual geom so the visual
+        # keeps group 1 and the collision geom can be hidden (group 3) and tuned on its own.
+        lines.append(f'{pad}  <geom class="rh56e2_collision" mesh="{child}" />')
         mesh_out.append((child, visual["file"]))
+        if rigid:
+            rigid_out.append(child)
 
     for nxt in urdf.children.get(child, []):
-        emit_body(urdf, nxt, scale, depth + 1, lines, joints_out, mesh_out)
+        emit_body(urdf, nxt, scale, depth + 1, lines, joints_out, mesh_out, rigid_out, rigid)
     lines.append(f"{pad}</body>")
 
 
 def build(urdf, mjcf_text):
     stats = {}
     equalities = []
+    excludes = []
     text = mjcf_text
 
     # -- defaults
@@ -279,13 +305,20 @@ def build(urdf, mjcf_text):
         '    <default class="rh56e2_motor">\n'
         '      <joint damping="0.01" armature="0.001" frictionloss="0.01"/>\n'
         "    </default>\n"
-        "    <!-- Visual only, exactly like the rubber hand these replace. Grasping is modelled by\n"
-        "         attaching the object to the arm in MoveIt's planning scene, and in this simulator by\n"
-        "         grasp_weld, so finger contact would cost solver time every step and buy nothing\n"
-        "         until grasp physics itself is under test. -->\n"
+        "    <!-- What you see: no contact, no mass (the bodies carry explicit inertials). -->\n"
         '    <default class="rh56e2_visual">\n'
         '      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0"\n'
         '        rgba="0.7 0.7 0.7 1"/>\n'
+        "    </default>\n"
+        "    <!-- What collides: the same meshes as convex hulls, hidden in group 3. Bitmask\n"
+        "         contype=2 / conaffinity=1 against everything else's 1 / 1: a hand geom contacts the\n"
+        "         world, scene objects and the rest of the robot, but never another hand geom --\n"
+        "         adjacent finger hulls overlap at their joints and would otherwise be in permanent\n"
+        "         contact. condim 4 adds torsional friction so a pinched object does not spin out;\n"
+        "         sliding friction 1.5 is a GUESS for rubber finger pads, not a measurement. -->\n"
+        '    <default class="rh56e2_collision">\n'
+        '      <geom type="mesh" contype="2" conaffinity="1" condim="4" group="3" density="0"\n'
+        '        friction="1.5 0.02 0.001" rgba="0.9 0.4 0.3 0.5"/>\n'
         "    </default>\n"
         "  </default>\n"
     )
@@ -307,8 +340,14 @@ def build(urdf, mjcf_text):
         origin = palm_joint.find("origin")
         pxyz = floats(origin.get("xyz"))
         lines = []
-        joints_out, meshes_out = [], []
-        emit_body(urdf, top[0], scale, 0, lines, joints_out, meshes_out)
+        joints_out, meshes_out, rigid_out = [], [], []
+        emit_body(urdf, top[0], scale, 0, lines, joints_out, meshes_out, rigid_out)
+        # The hand's flange-mounted bodies sit flush against the wrist links, so their hulls
+        # touch or overlap them at rest. Neither wrist link is the hand's direct parent (the
+        # empty palm frame is), so MuJoCo's parent-child filter does not cover them.
+        for wrist_link in (WRIST.format(side=side), f"{side}_wrist_pitch_link"):
+            for body_name in rigid_out:
+                excludes.append(f'    <exclude body1="{wrist_link}" body2="{body_name}" />\n')
         body = "\n".join("                            " + ln for ln in lines)
         stats["bodies"] = sum(1 for ln in lines if ln.lstrip().startswith("<body "))
         stats["joints"] = len(joints_out)
@@ -371,6 +410,9 @@ def build(urdf, mjcf_text):
         "  <!-- The RH56E2's passive finger segments, from the URDF's <mimic> tags: the second\n"
         "       joint of each finger follows the first, and the thumb's last two follow its second. -->\n"
         "  <equality>\n" + "".join(equalities) + "  </equality>\n\n"
+        "  <!-- Hand bodies bolted to the flange vs the wrist links they sit against. Hand-vs-hand\n"
+        "       contact is already off through rh56e2_collision's bitmask. -->\n"
+        "  <contact>\n" + "".join(excludes) + "  </contact>\n\n"
     )
     anchor = "  <actuator>\n"
     if text.count(anchor) != 1:

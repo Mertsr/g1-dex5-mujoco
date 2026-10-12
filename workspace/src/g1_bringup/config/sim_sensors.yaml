@@ -60,6 +60,8 @@ object_bodies:
 # Which welds exist is declared in the scene, not here: g1_navigation_scene.xml's `grasp_*`
 # equality constraints are found by name.
 grasp_weld:
+  # The hand now collides (patch 003) and holds objects by friction on its own; this weld is
+  # an assist on top. Set false to see what the fingers alone can hold.
   enabled: true
 
   # Palm origin to object origin. Covers the 0.13 m palm-to-grasp-point offset plus half a small
