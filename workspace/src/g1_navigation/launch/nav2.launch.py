@@ -95,6 +95,14 @@ def generate_launch_description():
     # per namespace. Dropped: this package uses no namespaces, use_sim_time is already false
     # throughout the file, and autostart is set on the lifecycle manager directly.
     configured_params = ParameterFile(params_file, allow_substs=True)
+    # Per-policy overlay, applied AFTER params_file so its values win. walk_policy:=isaaclab
+    # undoes nav2_params.yaml's walker-specific bang-bang tuning (slow regulated cruise, gentle
+    # turns); walker loads a file that names no real node, i.e. changes nothing.
+    nav2_profile = PythonExpression([
+        "'", os.path.join(share, "config", "nav2_profile_isaaclab.yaml"), "' if '",
+        LaunchConfiguration("walk_policy"), "'.strip().lower() == 'isaaclab' else '",
+        os.path.join(share, "config", "nav2_profile_walker.yaml"), "'",
+    ])
     # The params file cannot name its own package share, so the BT path is injected here.
     # Both trees, not just the one we use. bt_navigator loads every navigator's tree on
     # activate regardless of the navigators parameter (accepted but not honoured on Humble
@@ -116,7 +124,7 @@ def generate_launch_description():
                 executable="controller_server",
                 name="controller_server",
                 output="screen",
-                parameters=[configured_params],
+                parameters=[configured_params, nav2_profile],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=controller_remappings,
             ),
@@ -134,7 +142,7 @@ def generate_launch_description():
                 executable="behavior_server",
                 name="behavior_server",
                 output="screen",
-                parameters=[configured_params],
+                parameters=[configured_params, nav2_profile],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=remappings,
             ),

@@ -49,6 +49,14 @@ public:
         double yaw_clamp{ 1.57 };
         double lat_engage{ 0.50 };
         double lat_clamp{ 0.50 };
+        /// false (default): the four exclusive primitives below, for walker.onnx, whose
+        /// response to a combined command measures worst. true: each axis is deadbanded and
+        /// clamped independently and the results are COMBINED, so a planner's curve (forward +
+        /// yaw) reaches the gait as a curve -- for a policy that tracks mixed commands, where
+        /// exclusivity turns every small heading correction into stop, turn, drive. The
+        /// signed-forward reverse backstop and the never-amplifies / never-flips invariants
+        /// hold in both modes.
+        bool blend{ false };
     };
 
     struct Command

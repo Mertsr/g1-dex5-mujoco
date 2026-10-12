@@ -61,3 +61,33 @@ def test_spin_does_not_decelerate_into_the_deadband(behavior_server, yaw_engage)
         f"behavior_server min_rotational_vel {behavior_server['min_rotational_vel']} is below "
         f"yaw_engage {yaw_engage}; Spin's deceleration tail would stop the robot short."
     )
+
+
+# --- walk_policy:=isaaclab: nav2_profile_isaaclab.yaml over nav2_params.yaml, against
+# g1_gait_shaper_isaaclab.yaml. Same invariant, different pair of files.
+
+
+@pytest.fixture(scope="module")
+def isaaclab_yaw_engage():
+    path = LOCO_CONFIG / "g1_gait_shaper_isaaclab.yaml"
+    assert path.is_file(), f"{path} is missing; this test would silently pass"
+    return _params(path, "g1_gait_shaper")["yaw_engage"]
+
+
+@pytest.fixture(scope="module")
+def isaaclab_behavior_server(behavior_server):
+    path = NAV_CONFIG / "nav2_profile_isaaclab.yaml"
+    assert path.is_file(), f"{path} is missing; this test would silently pass"
+    merged = dict(behavior_server)
+    merged.update(_params(path, "behavior_server"))
+    return merged
+
+
+def test_isaaclab_spin_clears_its_deadband(isaaclab_behavior_server, isaaclab_yaw_engage):
+    assert isaaclab_behavior_server["max_rotational_vel"] >= isaaclab_yaw_engage
+    assert isaaclab_behavior_server["min_rotational_vel"] >= isaaclab_yaw_engage
+
+
+def test_isaaclab_rotate_to_heading_clears_its_deadband(isaaclab_yaw_engage):
+    params = _params(NAV_CONFIG / "nav2_profile_isaaclab.yaml", "controller_server")
+    assert params["FollowPath"]["rotate_to_heading_angular_vel"] >= isaaclab_yaw_engage

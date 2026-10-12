@@ -49,6 +49,26 @@ GaitShaper::GaitShaper(const Config& config)
 
 GaitShaper::Command GaitShaper::shape(const Command& in) const
 {
+    if (config_.blend)
+    {
+        // Every axis judged on its own, then combined. Finiteness first on each: NaN already
+        // fails every comparison below, but +/-inf would pass a threshold and reach the gait.
+        Command out{};
+        if (std::isfinite(in.vx) && (in.vx >= config_.fwd_engage || in.vx <= -config_.rev_engage))
+        {
+            out.vx = in.vx;
+        }
+        if (std::isfinite(in.vy) && std::abs(in.vy) >= config_.lat_engage)
+        {
+            out.vy = std::clamp(in.vy, -config_.lat_clamp, config_.lat_clamp);
+        }
+        if (std::isfinite(in.vyaw) && std::abs(in.vyaw) >= config_.yaw_engage)
+        {
+            out.vyaw = std::clamp(in.vyaw, -config_.yaw_clamp, config_.yaw_clamp);
+        }
+        return out;
+    }
+
     if (std::abs(in.vyaw) >= config_.yaw_engage)
     {
         // std::clamp, not copysign(min(abs)): the constructor guarantees yaw_clamp >= 0, so the

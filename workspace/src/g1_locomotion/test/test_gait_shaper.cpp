@@ -283,5 +283,76 @@ TEST(GaitShaperConfig, AcceptsTheShippedConfigAndTheBoundaryCase)
     EXPECT_NO_THROW(GaitShaper(GaitShaper::Config{ 0.0, kRevEngage, kYawEngage, kYawEngage }));
 }
 
+// --- blend mode: config/g1_gait_shaper_isaaclab.yaml ---------------------------------------
+
+GaitShaper makeBlendShaper()
+{
+    return GaitShaper(GaitShaper::Config{ 0.05, 0.05, 0.10, 1.57, 0.05, 0.50, true });
+}
+
+TEST(GaitShaperBlend, PassesACurveThroughAsACurve)
+{
+    // The whole point: exclusive mode turns this into a pure turn and the robot stops to make it.
+    const auto out = makeBlendShaper().shape({ 0.30, 0.0, 0.20 });
+    EXPECT_DOUBLE_EQ(out.vx, 0.30);
+    EXPECT_DOUBLE_EQ(out.vy, 0.0);
+    EXPECT_DOUBLE_EQ(out.vyaw, 0.20);
+}
+
+TEST(GaitShaperBlend, DeadbandsEachAxisIndependently)
+{
+    const auto out = makeBlendShaper().shape({ 0.30, 0.02, 0.05 });
+    EXPECT_DOUBLE_EQ(out.vx, 0.30);
+    EXPECT_DOUBLE_EQ(out.vy, 0.0);
+    EXPECT_DOUBLE_EQ(out.vyaw, 0.0);
+    EXPECT_TRUE(isStop(makeBlendShaper().shape({ 0.04, -0.04, 0.09 })));
+}
+
+TEST(GaitShaperBlend, ClampsYawAndLateralButNotForward)
+{
+    const auto out = makeBlendShaper().shape({ 0.80, -0.90, 3.0 });
+    EXPECT_DOUBLE_EQ(out.vx, 0.80);
+    EXPECT_DOUBLE_EQ(out.vy, -0.50);
+    EXPECT_DOUBLE_EQ(out.vyaw, 1.57);
+}
+
+TEST(GaitShaperBlend, KeepsTheReverseThreshold)
+{
+    const GaitShaper shaper(GaitShaper::Config{ 0.05, 0.55, 0.10, 1.57, 0.05, 0.50, true });
+    EXPECT_DOUBLE_EQ(shaper.shape({ -0.30, 0.0, 0.0 }).vx, 0.0);
+    EXPECT_DOUBLE_EQ(shaper.shape({ -0.60, 0.0, 0.0 }).vx, -0.60);
+}
+
+TEST(GaitShaperBlend, NonFiniteAxesBecomeZero)
+{
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_TRUE(isStop(makeBlendShaper().shape({ kInf, -kInf, kNaN })));
+    const auto out = makeBlendShaper().shape({ kNaN, 0.0, 0.30 });
+    EXPECT_DOUBLE_EQ(out.vx, 0.0);
+    EXPECT_DOUBLE_EQ(out.vyaw, 0.30);
+}
+
+TEST(GaitShaperBlend, NeverAmplifiesOrFlips)
+{
+    const auto shaper = makeBlendShaper();
+    for (double vx : { -1.0, -0.06, 0.0, 0.06, 0.4, 1.2 })
+    {
+        for (double vy : { -0.8, -0.06, 0.0, 0.3 })
+        {
+            for (double vyaw : { -2.0, -0.2, 0.0, 0.11, 1.0 })
+            {
+                const auto out = shaper.shape({ vx, vy, vyaw });
+                EXPECT_LE(std::abs(out.vx), std::abs(vx));
+                EXPECT_LE(std::abs(out.vy), std::abs(vy));
+                EXPECT_LE(std::abs(out.vyaw), std::abs(vyaw));
+                EXPECT_GE(out.vx * vx, 0.0);
+                EXPECT_GE(out.vy * vy, 0.0);
+                EXPECT_GE(out.vyaw * vyaw, 0.0);
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace g1_locomotion

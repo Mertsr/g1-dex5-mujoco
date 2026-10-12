@@ -72,13 +72,14 @@ public:
             get_logger(),
             "Shaping %s -> %s, with %s taking priority for %.1f s after each message. Below "
             "%.2f m/s forward or %.2f rad/s yaw the gait does not step, so anything smaller is "
-            "passed through as a stop.",
+            "passed through as a stop. Mode: %s.",
             subscription_->get_topic_name(),
             publisher_->get_topic_name(),
             override_sub_->get_topic_name(),
             override_timeout_s_,
             shaper_config_.fwd_engage,
-            shaper_config_.yaw_engage);
+            shaper_config_.yaw_engage,
+            shaper_config_.blend ? "blend (axes combined)" : "exclusive primitives");
     }
 
 private:
@@ -98,6 +99,7 @@ private:
             declare_parameter("yaw_clamp", defaults.yaw_clamp),
             declare_parameter("lat_engage", defaults.lat_engage),
             declare_parameter("lat_clamp", defaults.lat_clamp),
+            declare_parameter("blend", defaults.blend),
         };
     }
 

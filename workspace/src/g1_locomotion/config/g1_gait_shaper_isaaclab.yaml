@@ -20,6 +20,10 @@
 # the end of a goal, raise them before touching anything else.
 g1_gait_shaper:
   ros__parameters:
+    # Combine axes instead of picking one primitive. Exclusive mode made every heading
+    # correction from RPP above yaw_engage a stop-and-turn, so the robot walked in a
+    # stop/turn/drive stutter. This policy tracks mixed commands; a curve reaches it as a curve.
+    blend: true
     fwd_engage: 0.05
     # Same reasoning as g1_gait_shaper.yaml's rev_engage, minus the measured dead zone: a
     # planner's backup speeds now get through. Raise this back towards 0.55 if a recovery
