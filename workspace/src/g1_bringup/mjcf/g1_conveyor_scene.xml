@@ -372,27 +372,23 @@
     <body name="conveyor_pallet" pos="0.1741 0.6 0.762">
       <joint name="conveyor_pallet_slide" type="slide" axis="1 0 0" limited="true" range="0 0.7497" damping="20"/>
       <inertial pos="0 0 0" mass="10" diaginertia="0.4 0.4 0.8"/>
-      <geom name="conveyor_pallet_plate" group="2" type="box" size="0.3262 0.316 0.01" material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>
+      <geom name="conveyor_pallet_plate" group="2" type="box" size="0.3262 0.316 0.01" pos="0 0 0" material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>
       <geom name="conveyor_nest_1_pad_a" group="2" type="box" size="0.0513 0.0215 0.02" pos="0.2113 -0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_1_wall_a" group="2" type="box" size="0.0753 0.008 0.035" pos="0.2259 -0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_1_pad_b" group="2" type="box" size="0.0513 0.0215 0.02" pos="0.2113 0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_1_wall_b" group="2" type="box" size="0.0753 0.008 0.035" pos="0.2259 0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
-      <site name="conveyor_nest_1" group="4" type="box" size="0.0733 0.303 0.008" pos="0.2259 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
       <geom name="conveyor_nest_2_pad_a" group="2" type="box" size="0.0513 0.0215 0.02" pos="0.0607 -0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_2_wall_a" group="2" type="box" size="0.0753 0.008 0.035" pos="0.0753 -0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_2_pad_b" group="2" type="box" size="0.0513 0.0215 0.02" pos="0.0607 0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_2_wall_b" group="2" type="box" size="0.0753 0.008 0.035" pos="0.0753 0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
-      <site name="conveyor_nest_2" group="4" type="box" size="0.0733 0.303 0.008" pos="0.0753 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
       <geom name="conveyor_nest_3_pad_a" group="2" type="box" size="0.0513 0.0215 0.02" pos="-0.09 -0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_3_wall_a" group="2" type="box" size="0.0753 0.008 0.035" pos="-0.0753 -0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_3_pad_b" group="2" type="box" size="0.0513 0.0215 0.02" pos="-0.09 0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_3_wall_b" group="2" type="box" size="0.0753 0.008 0.035" pos="-0.0753 0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
-      <site name="conveyor_nest_3" group="4" type="box" size="0.0733 0.303 0.008" pos="-0.0753 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
       <geom name="conveyor_nest_4_pad_a" group="2" type="box" size="0.0513 0.0215 0.02" pos="-0.2406 -0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_4_wall_a" group="2" type="box" size="0.0753 0.008 0.035" pos="-0.2259 -0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_4_pad_b" group="2" type="box" size="0.0513 0.0215 0.02" pos="-0.2406 0.2765 0.03" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_4_wall_b" group="2" type="box" size="0.0753 0.008 0.035" pos="-0.2259 0.308 0.045" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
-      <site name="conveyor_nest_4" group="4" type="box" size="0.0733 0.303 0.008" pos="-0.2259 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
       <geom name="conveyor_pallet_base_a" group="2" type="box" size="0.3062 0.0305 0.0015" pos="0 -0.2855 0.0115" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_pallet_base_b" group="2" type="box" size="0.3062 0.0305 0.0015" pos="0 0.2855 0.0115" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_pallet_stop_0_a" group="2" type="box" size="0.005 0.0225 0.03" pos="0.3012 -0.2775 0.04" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
@@ -405,6 +401,10 @@
       <geom name="conveyor_pallet_stop_3_b" group="2" type="box" size="0.005 0.0225 0.03" pos="-0.1506 0.2775 0.04" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_pallet_stop_4_a" group="2" type="box" size="0.005 0.0225 0.03" pos="-0.3012 -0.2775 0.04" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_pallet_stop_4_b" group="2" type="box" size="0.005 0.0225 0.03" pos="-0.3012 0.2775 0.04" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <site name="conveyor_nest_1" group="4" type="box" size="0.0733 0.303 0.008" pos="0.2259 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
+      <site name="conveyor_nest_2" group="4" type="box" size="0.0733 0.303 0.008" pos="0.0753 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
+      <site name="conveyor_nest_3" group="4" type="box" size="0.0733 0.303 0.008" pos="-0.0753 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
+      <site name="conveyor_nest_4" group="4" type="box" size="0.0733 0.303 0.008" pos="-0.2259 0 0.0623" rgba="0.2 0.9 0.3 0.25"/>
     </body>
     <!-- END generated by tools/make_conveyor_pallet.py -->
 

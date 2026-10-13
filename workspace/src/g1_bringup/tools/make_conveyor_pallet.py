@@ -13,7 +13,7 @@ therefore two end cradles, one under each end of the panel:
   stops  posts in front of and behind the end, locating it along travel; shared between
          neighbouring nests, so nests sit one pitch apart with nothing else between them;
   base   a 3 mm floor slab under the cradle, so pad, wall and stops form one solid part (the
-         same part tools/export_conveyor_nest_stl.py writes out as an STL).
+         same solid tools/export_conveyor_pallet_stl.py writes out as an STL).
 
 Measured off BSH_panel.stl in the scene's orientation (euler="-1.5708 1.57 0", refpos
 0 0.001 -0.046): half-extents 0.298 across the belt and 0.0683 along it; feet 12.25 mm below the
@@ -95,26 +95,71 @@ def box(name, size, pos, look):
             f'pos="{" ".join(num(p) for p in pos)}" {look} contype="1" conaffinity="1"/>')
 
 
-def build(clearance, nests, load_x):
+def pallet_geometry(clearance, nests):
+    """Every solid of the pallet as boxes in the pallet frame (origin at the plate's centre, x
+    along travel, z up), plus the derived dimensions. The single source for both the scene block
+    (build) and the STL export (export_conveyor_pallet_stl.py), so the two cannot drift apart."""
     pitch = 2 * (PART_HALF_ALONG + clearance) + 2 * STOP_HALF_T
     wall_y = PART_HALF_ACROSS + clearance + WALL_HALF_T
     plate_half_x = nests * pitch / 2 + STOP_HALF_T + PLATE_MARGIN_X
     plate_half_y = wall_y + WALL_HALF_T
+    plate_top = PLATE_HALF_T
+
+    def nest_x(k):  # nest k (1-based) centre, k = 1 at the downstream end
+        return ((nests + 1) / 2 - k) * pitch
+
+    boxes = [("conveyor_pallet_plate", (plate_half_x, plate_half_y, PLATE_HALF_T), (0, 0, 0))]
+    pad_half = ((PAD_FRONT_X - PAD_BACK_X) / 2, (PART_HALF_ACROSS - PAD_INNER) / 2, PAD_HEIGHT / 2)
+    pad_cx = (PAD_FRONT_X + PAD_BACK_X) / 2
+    pad_cy = (PART_HALF_ACROSS + PAD_INNER) / 2
+    wall_h = PAD_HEIGHT + WALL_ABOVE
+    stop_h = PAD_HEIGHT + STOP_ABOVE
+    for k in range(1, nests + 1):
+        cx = nest_x(k)
+        for end, sign in (("a", -1), ("b", 1)):
+            boxes.append((f"conveyor_nest_{k}_pad_{end}", pad_half,
+                          (cx + pad_cx, sign * pad_cy, plate_top + PAD_HEIGHT / 2)))
+            boxes.append((f"conveyor_nest_{k}_wall_{end}", (pitch / 2, WALL_HALF_T, wall_h / 2),
+                          (cx, sign * wall_y, plate_top + wall_h / 2)))
+    # Floor slab under each end region, the full pallet length: one strip per end that every
+    # cradle stands on, so each cradle is a single connected solid.
+    base_half = (nests * pitch / 2 + STOP_HALF_T, (wall_y + WALL_HALF_T - PAD_INNER) / 2, BASE_T / 2)
+    base_cy = (wall_y + WALL_HALF_T + PAD_INNER) / 2
+    for end, sign in (("a", -1), ("b", 1)):
+        boxes.append((f"conveyor_pallet_base_{end}", base_half, (0, sign * base_cy, plate_top + BASE_T / 2)))
+    # Stops at every nest boundary, in both end regions only: the middle of the panel stays
+    # open, as on the real pallet, and nothing stands under the clips.
+    stop_half_y = (PART_HALF_ACROSS + clearance - PAD_INNER) / 2
+    stop_cy = (PART_HALF_ACROSS + clearance + PAD_INNER) / 2
+    for r in range(nests + 1):
+        rx = nest_x(1) + pitch / 2 - r * pitch
+        for end, sign in (("a", -1), ("b", 1)):
+            boxes.append((f"conveyor_pallet_stop_{r}_{end}", (STOP_HALF_T, stop_half_y, stop_h / 2),
+                          (rx, sign * stop_cy, plate_top + stop_h / 2)))
+    return {
+        "pitch": pitch,
+        "plate_half_x": plate_half_x,
+        "plate_half_y": plate_half_y,
+        "plate_top": plate_top,
+        "nest_x": [nest_x(k) for k in range(1, nests + 1)],
+        "seat_above_plate_top": PAD_HEIGHT + FEET_BELOW,  # panel origin height over the plate top
+        "boxes": boxes,
+    }
+
+
+def build(clearance, nests, load_x):
+    geo = pallet_geometry(clearance, nests)
+    pitch, plate_half_x, plate_half_y = geo["pitch"], geo["plate_half_x"], geo["plate_half_y"]
     if plate_half_y > RAIL_INNER_HALF - 0.005:
         raise SystemExit(f"pallet half-width {plate_half_y:.4f} m does not clear the rails: reduce the clearance")
 
     body_z = BELT_TOP + PLATE_GAP + PLATE_HALF_T  # pallet origin = plate centre
-    plate_top = PLATE_HALF_T  # in the pallet frame
-    pad_top = plate_top + PAD_HEIGHT
-    seat_z = body_z + pad_top + FEET_BELOW  # world z of a seated panel's origin
+    seat_z = body_z + geo["plate_top"] + geo["seat_above_plate_top"]  # world z of a seated panel
     clip_clear = PAD_HEIGHT + FEET_BELOW - CLIP_BELOW - BASE_T  # the near-end clip hangs over the base
     if clip_clear < 0.003:
         raise SystemExit("PAD_HEIGHT leaves the clips touching the cradle base")
 
-    def nest_x(k):  # nest k (1-based) centre in the pallet frame, k = 1 at the downstream end
-        return ((nests + 1) / 2 - k) * pitch
-
-    x0 = load_x - nest_x(1)  # pallet origin with nest 1 at the station, slide q = 0
+    x0 = load_x - geo["nest_x"][0]  # pallet origin with nest 1 at the station, slide q = 0
     if x0 - plate_half_x < BELT_X_MIN:
         raise SystemExit(f"--load-x {load_x}: pallet would start off the belt's near end")
     q_max = (BELT_X_MAX - END_MARGIN - plate_half_x) - x0
@@ -139,45 +184,21 @@ def build(clearance, nests, load_x):
         f'{pad}  <joint name="conveyor_pallet_slide" type="slide" axis="1 0 0" limited="true" '
         f'range="0 {num(q_max)}" damping="20"/>',
         f'{pad}  <inertial pos="0 0 0" mass="{num(PALLET_MASS)}" diaginertia="0.4 0.4 0.8"/>',
-        f'{pad}  <geom name="conveyor_pallet_plate" group="2" type="box" '
-        f'size="{num(plate_half_x)} {num(plate_half_y)} {num(PLATE_HALF_T)}" '
-        f'material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>',
     ]
-
-    pad_half = ((PAD_FRONT_X - PAD_BACK_X) / 2, (PART_HALF_ACROSS - PAD_INNER) / 2, PAD_HEIGHT / 2)
-    pad_cx = (PAD_FRONT_X + PAD_BACK_X) / 2
-    pad_cy = (PART_HALF_ACROSS + PAD_INNER) / 2
-    wall_h = PAD_HEIGHT + WALL_ABOVE
-    stop_h = PAD_HEIGHT + STOP_ABOVE
-    for k in range(1, nests + 1):
-        cx = nest_x(k)
-        for end, sign in (("a", -1), ("b", 1)):
-            out.append(pad + "  " + box(f"conveyor_nest_{k}_pad_{end}", pad_half,
-                                        (cx + pad_cx, sign * pad_cy, plate_top + PAD_HEIGHT / 2), WHITE))
-            out.append(pad + "  " + box(f"conveyor_nest_{k}_wall_{end}", (pitch / 2, WALL_HALF_T, wall_h / 2),
-                                        (cx, sign * wall_y, plate_top + wall_h / 2), WHITE))
+    for name, half, pos in geo["boxes"]:
+        if name == "conveyor_pallet_plate":
+            out.append(f'{pad}  <geom name="{name}" group="2" type="box" '
+                       f'size="{" ".join(num(h) for h in half)}" pos="0 0 0" '
+                       f'material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>')
+        else:
+            out.append(pad + "  " + box(name, half, pos, WHITE))
+    for k, cx in enumerate(geo["nest_x"], start=1):
         out.append(
             f'{pad}  <site name="conveyor_nest_{k}" group="4" type="box" '
             f'size="{num(PART_HALF_ALONG + clearance + SITE_MARGIN)} '
             f'{num(PART_HALF_ACROSS + clearance + SITE_MARGIN)} {num(SITE_HALF_UP)}" '
             f'pos="{num(cx)} 0 {num(seat_z - body_z)}" rgba="0.2 0.9 0.3 0.25"/>'
         )
-    # Floor slab under each end region, the full pallet length: one strip per end that every
-    # cradle stands on, so each cradle is a single connected solid like the exported STL.
-    base_half = (nests * pitch / 2 + STOP_HALF_T, (wall_y + WALL_HALF_T - PAD_INNER) / 2, BASE_T / 2)
-    base_cy = (wall_y + WALL_HALF_T + PAD_INNER) / 2
-    for end, sign in (("a", -1), ("b", 1)):
-        out.append(pad + "  " + box(f"conveyor_pallet_base_{end}", base_half,
-                                    (0, sign * base_cy, plate_top + BASE_T / 2), WHITE))
-    # Stops at every nest boundary, in both end regions only: the middle of the panel stays
-    # open, as on the real pallet, and nothing stands under the clips.
-    stop_half_y = (PART_HALF_ACROSS + clearance - PAD_INNER) / 2
-    stop_cy = (PART_HALF_ACROSS + clearance + PAD_INNER) / 2
-    for r in range(nests + 1):
-        rx = nest_x(1) + pitch / 2 - r * pitch
-        for end, sign in (("a", -1), ("b", 1)):
-            out.append(pad + "  " + box(f"conveyor_pallet_stop_{r}_{end}", (STOP_HALF_T, stop_half_y, stop_h / 2),
-                                        (rx, sign * stop_cy, plate_top + stop_h / 2), WHITE))
     out += [f"{pad}</body>", f"{pad}{END}"]
 
     summary = (
