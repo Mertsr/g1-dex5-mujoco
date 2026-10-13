@@ -11,7 +11,9 @@ therefore two end cradles, one under each end of the panel:
          stopping short of the clip that sits near one end;
   wall   outboard of the end, locating the panel across the belt;
   stops  posts in front of and behind the end, locating it along travel; shared between
-         neighbouring nests, so nests sit one pitch apart with nothing else between them.
+         neighbouring nests, so nests sit one pitch apart with nothing else between them;
+  base   a 3 mm floor slab under the cradle, so pad, wall and stops form one solid part (the
+         same part tools/export_conveyor_nest_stl.py writes out as an STL).
 
 Measured off BSH_panel.stl in the scene's orientation (euler="-1.5708 1.57 0", refpos
 0 0.001 -0.046): half-extents 0.298 across the belt and 0.0683 along it; feet 12.25 mm below the
@@ -75,6 +77,7 @@ WALL_HALF_T = 0.008  # end wall thickness (across the belt)
 WALL_ABOVE = 0.030  # end wall top above the pad top
 STOP_HALF_T = 0.005  # stop thickness (along travel)
 STOP_ABOVE = 0.020  # stop top above the pad top
+BASE_T = 0.003  # floor slab under each cradle, tying pad, wall and stops into one solid part
 PALLET_MASS = 10.0
 SITE_MARGIN = 0.003  # nest sites reach this far past the clearance, so a seated panel reads as inside
 SITE_HALF_UP = 0.008  # and this far up/down from the seated height: resting, not hovering
@@ -104,9 +107,9 @@ def build(clearance, nests, load_x):
     plate_top = PLATE_HALF_T  # in the pallet frame
     pad_top = plate_top + PAD_HEIGHT
     seat_z = body_z + pad_top + FEET_BELOW  # world z of a seated panel's origin
-    clip_clear = PAD_HEIGHT + FEET_BELOW - CLIP_BELOW
+    clip_clear = PAD_HEIGHT + FEET_BELOW - CLIP_BELOW - BASE_T  # the near-end clip hangs over the base
     if clip_clear < 0.003:
-        raise SystemExit("PAD_HEIGHT leaves the clips touching the plate")
+        raise SystemExit("PAD_HEIGHT leaves the clips touching the cradle base")
 
     def nest_x(k):  # nest k (1-based) centre in the pallet frame, k = 1 at the downstream end
         return ((nests + 1) / 2 - k) * pitch
@@ -159,6 +162,13 @@ def build(clearance, nests, load_x):
             f'{num(PART_HALF_ACROSS + clearance + SITE_MARGIN)} {num(SITE_HALF_UP)}" '
             f'pos="{num(cx)} 0 {num(seat_z - body_z)}" rgba="0.2 0.9 0.3 0.25"/>'
         )
+    # Floor slab under each end region, the full pallet length: one strip per end that every
+    # cradle stands on, so each cradle is a single connected solid like the exported STL.
+    base_half = (nests * pitch / 2 + STOP_HALF_T, (wall_y + WALL_HALF_T - PAD_INNER) / 2, BASE_T / 2)
+    base_cy = (wall_y + WALL_HALF_T + PAD_INNER) / 2
+    for end, sign in (("a", -1), ("b", 1)):
+        out.append(pad + "  " + box(f"conveyor_pallet_base_{end}", base_half,
+                                    (0, sign * base_cy, plate_top + BASE_T / 2), WHITE))
     # Stops at every nest boundary, in both end regions only: the middle of the panel stays
     # open, as on the real pallet, and nothing stands under the clips.
     stop_half_y = (PART_HALF_ACROSS + clearance - PAD_INNER) / 2
