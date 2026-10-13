@@ -1,7 +1,9 @@
 <mujoco model="g1_conveyor_scene">
-  <!-- Mert's own world: a low workbench table a short walk from a 1.5 m roller conveyor, the
-       belt feeding into an open basket at its far end, inside a room bounded by chain-link-
-       style fencing on all four sides.
+  <!-- Mert's own world: a shallow supply tray a short walk from a 1.5 m roller conveyor
+       carrying a four-nest slotted pallet (the real line's fixture; see the pallet block
+       below), the belt ending at an open basket, inside a room bounded by chain-link-style
+       fencing on all four sides. The task: carry each panel from the tray and seat it in the
+       pallet nest at the load station.
 
        A brand-new scene rather than a change to g1_manipulation_scene.xml, so nothing that
        measures against that scene (its pedestal height, its cube pose, its grasp welds)
@@ -32,10 +34,20 @@
       reflectance="0.2"/>
     <material name="pedestal_mat" rgba="0.35 0.38 0.42 1"/>
     <material name="belt_mat" rgba="0.12 0.12 0.12 1"/>
-    <material name="roller_mat" rgba="0.75 0.77 0.80 1" specular="0.9" shininess="0.95"/>
+    <!-- roller_mat: was a light silver (0.75 0.77 0.80), now black per Mert's request. Kept
+         the high specular/shininess (0.9/0.95) so it still reads as metal rather than matte
+         plastic -- a glossy black roller rather than a flat one. -->
+    <material name="roller_mat" rgba="0.05 0.05 0.05 1" specular="0.9" shininess="0.95"/>
     <material name="rail_mat" rgba="0.55 0.56 0.58 1" specular="0.5" shininess="0.6"/>
+    <!-- chute_mat: split out from rail_mat so the discharge chute ("rampa") can go black
+         without also recoloring the rails and legs, which still share rail_mat and were not
+         asked to change. -->
+    <material name="chute_mat" rgba="0.05 0.05 0.05 1" specular="0.4" shininess="0.5"/>
     <material name="basket_mat" rgba="0.45 0.30 0.12 1" specular="0.1" shininess="0.1"/>
-    <material name="mat_part" rgba="0.85 0.55 0.1 1" specular="0.5" shininess="0.6"/>
+    <!-- mat_part: was orange (0.85 0.55 0.1), now white per Mert's request. Not pure 1 1 1 --
+         a touch under full white (0.92) with low specular so the part doesn't blow out to a
+         featureless glare under the scene's headlight; still reads as white. -->
+    <material name="mat_part" rgba="0.92 0.92 0.92 1" specular="0.3" shininess="0.3"/>
 
     <!-- Stand-in for chain-link/wire-mesh fencing. MuJoCo has no wire-lattice primitive, so a
          fine checker texture at high repeat plus partial alpha is used on plain wall geoms
@@ -46,6 +58,38 @@
       rgb2="0.70 0.71 0.73" width="64" height="64"/>
     <material name="fence_mat" texture="fence_tex" texuniform="true" texrepeat="60 20"
       rgba="1 1 1 0.55" specular="0.3" shininess="0.3"/>
+
+    <!-- Mert's real part (BSH_panel.stl), swapped in for the placeholder puck. `meshdir="meshes"`
+         is set by g1_29dof.xml's own <compiler> tag (this scene is <include>-d into it, so
+         there is only one compiler block for the whole model) and resolves relative to the
+         vendored G1 model directory -- the same directory the RH56E2 hand STLs already live
+         in. So this file is NOT found next to g1_conveyor_scene.xml: it has to sit at
+         unitree_robots/g1/meshes/BSH_panel.stl (i.e. wherever G1_MODEL_DIR/meshes already sits
+         on this machine), the same place the rh56e2/*.STL files were copied during the native
+         rebuild, and it has to be a BINARY STL -- MuJoCo's loader rejects ASCII STL with
+         "number of faces should be between 1 and 200000" because it derives the face count
+         from file size assuming the binary layout. Re-export or convert
+         (numpy-stl: `mesh.Mesh.from_file(...).save(...)` writes binary by default) before
+         expecting this to load.
+
+         scale="1 1 1": measured directly off the actual file (numpy-stl bounding box) --
+         vertices span x -0.298..0.298, y -0.043..0.044, z -0.114..0.021, i.e. the STL is
+         already authored in metres (a roughly 0.60 x 0.09 x 0.14 m panel). The earlier 0.001
+         guess assumed millimetres and was shrinking it to an invisible ~0.6 mm sliver, which
+         is why nothing appeared.
+
+         refpos="0 0.001 -0.046": the mesh's own origin is NOT at its geometric centre -- that
+         z range (-0.114..0.021) puts the centre at z=-0.046, i.e. the origin sits up near the
+         TOP of the part. That is what actually produced the tilted, hanging-off-the-rail look
+         in the first render: conveyor_handler.cc applies its drag force at the body's own
+         origin, so with the origin near the top the force had a ~7 cm lever arm above the
+         part's true centre of mass -- the same tipping mechanism that was already diagnosed
+         and fixed for the placeholder puck (see the part bodies below), just much worse here
+         because the part is 0.135 m tall instead of 0.02 m. refpos shifts the mesh's own
+         vertices by this offset at compile time, so the body origin lands at the part's real
+         centre instead -- after this, the half-extents become symmetric: x +/-0.298,
+         y +/-0.0435, z +/-0.0676. -->
+    <mesh name="part_mesh" file="BSH_panel.stl" scale="1 1 1" refpos="0 0.001 -0.046"/>
   </asset>
 
   <worldbody>
@@ -53,7 +97,7 @@
     <light pos="1.2 -0.3 1.8" dir="0 0 -1" directional="true"/>
     <geom name="floor" group="2" size="0 0 0.05" type="plane" material="groundplane"/>
 
-    <!-- Perimeter fencing. A simple rectangular room, large enough that the table, belt and
+    <!-- Perimeter fencing. A simple rectangular room, large enough that the tray, belt and
          basket below (max extent roughly x -0.2..1.7, y -0.4..0.9) sit well inside it with
          room to walk the robot around. contype/conaffinity on, like real safety fencing: the
          room is a physical boundary, not just a backdrop. -->
@@ -66,187 +110,281 @@
     <geom name="fence_y_max" group="2" type="box" size="1.60 0.02 0.75" pos="0.60 1.30 0.75"
       material="fence_mat" contype="1" conaffinity="1"/>
 
-    <!-- Table: lower than g1_manipulation_scene's 0.785 m pedestal (0.75 here, "a little
-         lower" as asked), pushed up against the far wall (fence_x_max sits at x=2.20; the
-         table's far edge at 2.17 leaves 1 cm clearance -- as snug as it goes without
-         clipping) at the position Mert placed it by hand. Widened from 0.30x0.22 to
-         0.34x0.40 ("a bit wider"): x is capped by the wall, so the growth is mostly in y. -->
-    <geom name="table_top" group="2" type="box" size="0.34 0.40 0.015" pos="1.83 -0.80 0.735"
-      material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.15 -1.18 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.15 -0.42 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.51 -1.18 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="table_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.51 -0.42 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <!-- Shallow supply tray, replacing the flat table: same footprint-ish spot (lower than
+         g1_manipulation_scene's 0.785 m pedestal, floor still at 0.75 -- same resting plane as
+         the belt, so nothing about the parts' z or euler below has to change) pushed up
+         against the far wall (fence_x_max at x=2.20; floor's far edge at 2.17 keeps the same
+         1 cm clearance the table always had), but now with a shallow rim around it instead of
+         a bare top. This replaces the flat-table version entirely: that one let the parts
+         ("masadakiler") pick up a small sideways kick while settling onto an irregular mesh
+         collision shape (the real root cause, see the part bodies below) and, with only a
+         bare flat surface and ~10 cm of margin to the edge, nothing stopped that kick from
+         walking them clean off. A low rim fixes the actual failure mode -- containment --
+         rather than only damping the symptom (damping is still kept too, see below).
 
-    <!-- Roller conveyor, 1.5 m long, running along world +x (no rotation this time -- the
-         basket at the far end is just "a bit further down +x", which keeps every number in
-         this block in one frame instead of two). Top surface at 0.70, a little below the
-         table, matching a real roller conveyor sitting lower than a workbench.
+         x half-size (0.34) is UNCHANGED from the table -- it's wall-clearance limited, not
+         capacity limited, so there was no room to grow there without clipping the fence.
+         y half-size grown 0.40 -> 0.45 purely for more room to lay out several parts side by
+         side; see the parts below for how that space is used.
+
+         "derinliği çok olmasın" (keep it shallow): rim half-height 0.03 (6 cm tall, top at
+         0.78) -- tall enough to stop a lateral settling slide dead, nowhere near tall enough
+         to read as a deep bin. Three walls only: the near-x side (facing the room, where a
+         part sliding toward the robot would otherwise walk straight off) plus both y sides.
+         No far-x wall -- the room's own fence sits right there (1 cm beyond the floor's far
+         edge) and already blocks that side; a redundant wall at that same 1 cm gap would
+         clip into it. -->
+    <geom name="tray_floor" group="2" type="box" size="0.34 0.45 0.015" pos="1.83 -0.80 0.735"
+      material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_wall_near_x" group="2" type="box" size="0.01 0.45 0.03"
+      pos="1.48 -0.80 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_wall_y_min" group="2" type="box" size="0.34 0.01 0.03"
+      pos="1.83 -1.26 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_wall_y_max" group="2" type="box" size="0.34 0.01 0.03"
+      pos="1.83 -0.34 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="2.15 -1.23 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="2.15 -0.37 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="1.51 -1.23 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
+      pos="1.51 -0.37 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+
+    <!-- Roller conveyor, 1.5 m long, running along world +x. The physical support surface
+         (the `conveyor_belt` box) now sits with its own top at 0.75, not 0.70 -- raised to
+         meet the rollers at THEIR centreline rather than their base, so a resting part's
+         underside lines up with the rollers' own equator instead of hovering a full roller
+         diameter below their crests. The ramp that used to continue past x=1.30 is gone (it
+         was creating a small raised lip right where a part would hit it -- the actual cause
+         of the earlier "stuck/weird object" screenshot, not just a color problem); the belt
+         now simply pushes to its own edge and stops, same as any single-belt zone.
 
          `conveyor_belt` is the geom grove-g1's conveyor_handler.cc actually drives: a plain
-         box, matched by name (exact, or `conveyor_belt_<anything>` for more than one belt).
-         It is kept thin and dark rather than hidden, so it still reads as "the belt surface"
-         under the rollers. The rollers themselves (below) are a visual layer on top of it and
-         carry no physics of their own -- the box is what parts actually rest and drag on, so
-         the drag math in conveyor_handler.cc only ever has one geom to reason about. -->
-    <body name="conveyor_belt" pos="0.55 0.60 0.67" euler="0 0 0">
-      <geom name="conveyor_belt" group="2" type="box" size="0.75 0.175 0.03" material="belt_mat"
+         box, matched by name. It is what parts actually rest and drag on -- the rollers below
+         are still a visual-only layer (contype 0) on top of it, not a second physical surface,
+         because giving them real collision was tried and tested badly: a flat part bridging
+         narrow, closely-spaced cylinders rocks and spins on the gaps between them (measured
+         up to 90 deg of rotation and a part that visibly jammed in place rather than
+         travelling). A flat box stays the single source of physical truth; the rollers are
+         sized and positioned only to look right. The box is now drawn fully transparent
+         (rgba alpha 0): it still does all the physical work, it's just no longer hiding the
+         rollers behind an opaque slab.
+
+         WIDTH (y half-size) now 0.33 m: euler="-1.5708 1.57 0" on the part bodies below doesn't
+         just roll the part (a single-axis rotation) -- it's two rotations, and composed that
+         way the part's LONG axis (0.596 m) ends up across the belt (world y) instead of along
+         it, while its medium axis (0.135 m) becomes the travel-direction footprint. So the
+         belt actually needs to be wide, not narrow: half-width 0.33 m gives the 0.596 m part
+         about 3.2 cm clearance on each side. (The previous 0.075 m half-width was sized for the
+         single-axis roll that had the long axis still running along the belt -- that's no
+         longer the geometry once the second rotation is added.) Every y-offset below (rails,
+         frame, legs, rollers) is rederived from this new half-width. -->
+    <body name="conveyor_belt" pos="0.55 0.60 0.72" euler="0 0 0">
+      <geom name="conveyor_belt" group="2" type="box" size="0.75 0.33 0.03" rgba="0 0 0 0"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
+
+    <!-- Side frame channels the rollers mount into. With the belt box now invisible, these
+         give the roller bed something to sit in: two dark beams flanking the roller ends,
+         their tops flush with the crest line (0.75) so they frame the rollers without rising
+         above the resting surface. Visual only. y = belt centre (0.60) +/- (belt half-width
+         0.33 + this beam's own half-thickness 0.012) = 0.258 / 0.942. -->
+    <geom name="conveyor_frame_near" group="2" type="box" size="0.75 0.012 0.03"
+      pos="0.55 0.258 0.72" material="belt_mat" contype="0" conaffinity="0"/>
+    <geom name="conveyor_frame_far" group="2" type="box" size="0.75 0.012 0.03"
+      pos="0.55 0.942 0.72" material="belt_mat" contype="0" conaffinity="0"/>
 
     <!-- Side rails: raised guide rails along both edges, the length of the belt, both so a
          part can't wander off the side and so the conveyor reads as a conveyor rather than a
-         bare plank. contype on: they are meant to contain parts, same as the real thing. -->
+         bare plank. contype on: they are meant to contain parts, same as the real thing.
+         y = belt centre (0.60) +/- (belt half-width 0.33 + rail half-thickness 0.01) =
+         0.26 / 0.94 -- pushed back out to match the widened belt above. -->
     <geom name="conveyor_rail_near" group="2" type="box" size="0.75 0.01 0.05"
-      pos="0.55 0.415 0.75" material="rail_mat" contype="1" conaffinity="1"/>
+      pos="0.55 0.26 0.80" material="rail_mat" contype="1" conaffinity="1"/>
     <geom name="conveyor_rail_far" group="2" type="box" size="0.75 0.01 0.05"
-      pos="0.55 0.785 0.75" material="rail_mat" contype="1" conaffinity="1"/>
+      pos="0.55 0.94 0.80" material="rail_mat" contype="1" conaffinity="1"/>
 
-    <!-- Legs: the belt body sits at z=0.67 with half_z=0.03, so its underside is at 0.64 --
-         these six stand posts (near/mid/far along the length, both rails) hold that up off
-         the floor instead of leaving it floating, the way the rest of this scene's furniture
-         stands on its own legs. -->
-    <geom name="conveyor_leg_near_1" group="2" type="box" size="0.03 0.03 0.32"
-      pos="-0.15 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
-    <geom name="conveyor_leg_near_2" group="2" type="box" size="0.03 0.03 0.32"
-      pos="-0.15 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
-    <geom name="conveyor_leg_mid_1" group="2" type="box" size="0.03 0.03 0.32"
-      pos="0.55 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
-    <geom name="conveyor_leg_mid_2" group="2" type="box" size="0.03 0.03 0.32"
-      pos="0.55 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
-    <geom name="conveyor_leg_far_1" group="2" type="box" size="0.03 0.03 0.32"
-      pos="1.25 0.425 0.32" material="rail_mat" contype="1" conaffinity="1"/>
-    <geom name="conveyor_leg_far_2" group="2" type="box" size="0.03 0.03 0.32"
-      pos="1.25 0.775 0.32" material="rail_mat" contype="1" conaffinity="1"/>
+    <!-- Legs: the belt body's underside is at 0.69 (centre 0.72, half_z 0.03). y tracks the
+         rails' new (widened) centreline (0.26 / 0.94) -- these hold the rails up, so they have
+         to sit under wherever the rails actually are. -->
+    <geom name="conveyor_leg_near_1" group="2" type="box" size="0.03 0.03 0.345"
+      pos="-0.15 0.26 0.345" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_near_2" group="2" type="box" size="0.03 0.03 0.345"
+      pos="-0.15 0.94 0.345" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_mid_1" group="2" type="box" size="0.03 0.03 0.345"
+      pos="0.55 0.26 0.345" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_mid_2" group="2" type="box" size="0.03 0.03 0.345"
+      pos="0.55 0.94 0.345" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_far_1" group="2" type="box" size="0.03 0.03 0.345"
+      pos="1.25 0.26 0.345" material="rail_mat" contype="1" conaffinity="1"/>
+    <geom name="conveyor_leg_far_2" group="2" type="box" size="0.03 0.03 0.345"
+      pos="1.25 0.94 0.345" material="rail_mat" contype="1" conaffinity="1"/>
 
-    <!-- Discharge ramp: a second, angled belt segment rather than a bare edge at x=1.30.
-         Parts used to stop dead right at that edge -- the conveyor force cuts out exactly
-         when a part's centre crosses it, but its trailing half was still resting on the flat
-         box, so it balanced there in near-equilibrium for 30-60 (simulated) seconds before
-         gravity alone finally tipped it off. A named `conveyor_belt_*` geom is not special
-         cased in conveyor_handler.cc -- resolve() finds every belt by the same prefix match
-         and run() drags a body along WHICHEVER matching belt it's currently over, using that
-         belt's own pose for direction -- so this ramp is simply a second belt, angled 40 deg
-         down towards the basket, that keeps actively pushing (now down-and-forward along its
-         own tilted local +x) right through the transition instead of leaving it to a
-         knife-edge balance. Overlaps 3 cm back under the flat belt (its near edge sits at
-         x=1.27, not 1.30) so there is no geometric seam for a part to hang up on.
-         Checked standalone: the same stall that used to take 30-60 s now clears in about
-         10 s, and the part lands flat (not teetering) in the basket.
+    <!-- 14 rollers across the 1.5 m length, visual only (contype 0 -- the now-transparent
+         conveyor_belt box still carries the actual contact). Each is a cylinder laid across
+         the belt's width with `fromto`, radius 0.03, centred at z=0.72 so each roller's CREST
+         lands at 0.75 -- exactly the resting plane / belt-box top -- same reasoning as before.
 
-         rail_mat (steel grey), not belt_mat (near black): on the first pass this rendered as
-         a dark, oddly-shaped object against the orange basket, reading as foreign debris
-         rather than a chute. Halved its thickness too (0.03 to 0.015), closer to a plate than
-         a block. -->
-    <body name="conveyor_belt_ramp" pos="1.36 0.60 0.6245" euler="0 40 0">
-      <geom name="conveyor_belt_ramp" group="2" type="box" size="0.1175 0.175 0.015"
-        material="rail_mat" contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
-    </body>
+         y endpoints pushed back out from 0.535/0.665 to 0.28/0.92 (span 0.64 m, centred on
+         0.60) to match the belt's new 0.66 m width: a couple cm narrower than the rails
+         themselves (0.26/0.94) so the roller ends don't poke through them, same margin logic
+         as before. -->
+    <geom name="roller_01" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="-0.125 0.28 0.72  -0.125 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_02" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="-0.025 0.28 0.72  -0.025 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_03" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.075 0.28 0.72  0.075 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_04" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.175 0.28 0.72  0.175 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_05" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.275 0.28 0.72  0.275 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_06" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.375 0.28 0.72  0.375 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_07" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.475 0.28 0.72  0.475 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_08" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.575 0.28 0.72  0.575 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_09" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.675 0.28 0.72  0.675 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_10" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.775 0.28 0.72  0.775 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_11" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.875 0.28 0.72  0.875 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_12" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="0.975 0.28 0.72  0.975 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_13" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="1.075 0.28 0.72  1.075 0.92 0.72" contype="0" conaffinity="0"/>
+    <geom name="roller_14" group="2" type="cylinder" size="0.03" material="roller_mat"
+      fromto="1.175 0.28 0.72  1.175 0.92 0.72" contype="0" conaffinity="0"/>
 
-    <!-- 14 rollers across the 1.5 m length, visual only (contype 0 -- the belt box under them
-         carries the actual contact). Each is a cylinder laid across the belt's width with
-         `fromto`, rather than a body + default z-aligned cylinder, so there is no per-roller
-         orientation to get wrong. Radius trimmed twice now: 0.025 originally, then 0.012, now
-         0.006. The physical support is always the flat belt box at 0.70 regardless of roller
-         size, so any roller radius leaves SOME visible gap between where a part actually
-         rests and the rollers' own crest -- at 0.006 that gap is 1.2 cm, as close to flush as
-         a still-visible roller line gets without the rollers becoming pure decoration with no
-         relief at all. -->
-    <geom name="roller_01" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="-0.125 0.445 0.706  -0.125 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_02" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="-0.025 0.445 0.706  -0.025 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_03" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.075 0.445 0.706  0.075 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_04" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.175 0.445 0.706  0.175 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_05" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.275 0.445 0.706  0.275 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_06" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.375 0.445 0.706  0.375 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_07" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.475 0.445 0.706  0.475 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_08" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.575 0.445 0.706  0.575 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_09" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.675 0.445 0.706  0.675 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_10" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.775 0.445 0.706  0.775 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_11" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.875 0.445 0.706  0.875 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_12" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="0.975 0.445 0.706  0.975 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_13" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="1.075 0.445 0.706  1.075 0.755 0.706" contype="0" conaffinity="0"/>
-    <geom name="roller_14" group="2" type="cylinder" size="0.006" material="roller_mat"
-      fromto="1.175 0.445 0.706  1.175 0.755 0.706" contype="0" conaffinity="0"/>
+    <!-- Discharge chute from the belt's end down into the basket. The open-toss discharge was
+         what left parts stalling at the lip: driven at only ~0.08 m/s a part reaches the end
+         with almost no momentum, so the moment the drag cuts out it just sits on the edge and
+         the parts behind pile into it. This chute's top edge starts flush with the belt
+         surface (~0.75, no raised lip) and overlaps the belt's last ~1.5 cm, so a part arriving
+         at the end meets a downslope and carries on into the basket under gravity instead of
+         stopping. Pitched ~55 deg (set via xyaxes, so it's independent of the model's deg/rad
+         angle setting) because the parts carry high belt-grip friction and MuJoCo takes the
+         per-contact friction as the max of the two geoms -- a gentler ramp wouldn't let them
+         slide. It shares the static weld of the belt and basket, so the overlap makes no
+         spurious contacts. Width (0.08 -> 0.35 half-size) widened along with the belt: the
+         part's 0.596 m long axis is now the across-belt dimension (see the rotation note on
+         the part bodies below), so the chute has to be wide enough to carry that across, not
+         narrow -- 0.35 half-size is a touch wider than the belt itself (0.33) so a part
+         doesn't have to track the centreline perfectly to clear the hand-off, and matches the
+         basket's own new width below so there's no pinch point between them. -->
+    <geom name="discharge_chute" group="2" type="box" size="0.19 0.35 0.008"
+      pos="1.39 0.60 0.59" xyaxes="0.579 0 -0.815 0 1 0" material="chute_mat"
+      contype="1" conaffinity="1" friction="0.4 0.01 0.0001"/>
 
     <!-- Basket at the belt's discharge end (belt's far edge is at x = 0.55 + 0.75 = 1.30).
          Open on the belt-facing side on purpose: conveyor_handler.cc stops dragging a part the
-         instant it crosses the belt box's own edge, so from there it is a short, nearly-flat
-         toss off the end -- a facing wall would just be something for it to clip on the way
-         in. Floor sits 0.29 m below the belt top, which is enough drop that a part lands
-         inside rather than skimming the lip. -->
-    <geom name="basket_floor" group="2" type="box" size="0.18 0.20 0.01" pos="1.48 0.60 0.40"
+         instant it crosses the belt box's own edge, so from there it's a short toss off the
+         end -- a facing wall would just be something to clip on the way in.
+
+         WIDTH (y half-size, floor/far wall) grown from 0.20 to 0.35 m, and the near/far side
+         walls moved out to match (0.25 / 0.95 instead of 0.41 / 0.79): same reason as the belt
+         and chute above -- with euler="-1.5708 1.57 0", the part's 0.596 m long axis lands
+         across the belt (world y), so whatever catches it falling off the end has to be at
+         least that wide. 0.35 half-size (0.70 m total) gives it ~5 cm clearance on each side
+         even if it doesn't land perfectly square. x (0.18 half, the other, 0.135 m-footprint
+         direction) is unchanged -- already generous for that axis. -->
+    <geom name="basket_floor" group="2" type="box" size="0.18 0.35 0.01" pos="1.48 0.60 0.40"
       material="basket_mat" contype="1" conaffinity="1"/>
-    <geom name="basket_wall_far" group="2" type="box" size="0.01 0.20 0.15" pos="1.66 0.60 0.56"
+    <geom name="basket_wall_far" group="2" type="box" size="0.01 0.35 0.15" pos="1.66 0.60 0.56"
       material="basket_mat" contype="1" conaffinity="1"/>
-    <geom name="basket_wall_near" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.41 0.56"
+    <geom name="basket_wall_near" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.25 0.56"
       material="basket_mat" contype="1" conaffinity="1"/>
-    <geom name="basket_wall_far2" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.79 0.56"
+    <geom name="basket_wall_far2" group="2" type="box" size="0.18 0.01 0.15" pos="1.48 0.95 0.56"
       material="basket_mat" contype="1" conaffinity="1"/>
 
     <!-- The basket's own floor sits at z=0.40, same floating-furniture issue the belt had --
-         these two posts hold it up rather than leaving it hanging. -->
+         these two posts hold it up rather than leaving it hanging. y moved out to stay under
+         the widened floor's corners (0.30 / 0.90 instead of 0.44 / 0.76). -->
     <geom name="basket_leg_1" group="2" type="box" size="0.025 0.025 0.195"
-      pos="1.33 0.44 0.195" material="basket_mat" contype="1" conaffinity="1"/>
+      pos="1.33 0.30 0.195" material="basket_mat" contype="1" conaffinity="1"/>
     <geom name="basket_leg_2" group="2" type="box" size="0.025 0.025 0.195"
-      pos="1.63 0.76 0.195" material="basket_mat" contype="1" conaffinity="1"/>
+      pos="1.63 0.90 0.195" material="basket_mat" contype="1" conaffinity="1"/>
 
-    <!-- Three copies of one part, staged at the belt's near (table) end rather than on the
-         table, so the belt starts dragging them towards the basket as soon as the sim comes
-         up -- "parts fall into the basket" needs them on the belt, not waiting to be placed
-         there. Placeholder pucks until the real part file is in hand; only the geom changes
-         when it arrives, nothing about the belt or basket math cares what shape is on it.
+    <!-- The belt carries a slotted pallet instead of loose parts, after the real line (photo,
+         2026-10-13): an aluminium plate on the rollers with four panels face-up across it,
+         each located by a white block at either end and a rib in front and behind. The panels
+         start in the tray below; the robot carries them over and seats them one at a time at
+         the load station. The block between the markers is generated -- change the nest
+         clearance, count or load station with tools/make_conveyor_pallet.py, not by hand.
+         The three loose parts that used to ride the bare belt are gone: the pallet occupies
+         that stretch of belt, and a part placed there now has to go into a nest. -->
+    <!-- BEGIN generated by tools/make_conveyor_pallet.py -- do not edit by hand -->
+    <!-- Slotted pallet, after the real line: 4 nests, clearance 2.0 mm per side, pitch 149.2 mm. Indexed by the conveyor handler: nest 1 starts at the load station; each time a panel settles in the nest there, untouched by the robot, the pallet advances one pitch; once the last nest is filled it runs to the belt's far end and stops. Regenerate with make_conveyor_pallet.py --clearance-mm 2 --nests 4 --load-x 0.4. -->
+    <site name="conveyor_load_station" group="4" type="sphere" size="0.01" pos="0.4 0.6 0.8155" rgba="0.1 0.6 1 0.6"/>
+    <body name="conveyor_pallet" pos="0.1762 0.6 0.762">
+      <joint name="conveyor_pallet_slide" type="slide" axis="1 0 0" limited="true" range="0 0.7504" damping="20"/>
+      <inertial pos="0 0 0" mass="10" diaginertia="0.4 0.4 0.8"/>
+      <geom name="conveyor_pallet_plate" group="2" type="box" size="0.3234 0.316 0.01" rgba="0.62 0.64 0.66 1" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>
+      <geom name="conveyor_nest_1_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="0.2238 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_nest_1_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="0.2238 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <site name="conveyor_nest_1" group="4" type="box" size="0.0726 0.303 0.008" pos="0.2238 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
+      <geom name="conveyor_nest_2_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="0.0746 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_nest_2_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="0.0746 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <site name="conveyor_nest_2" group="4" type="box" size="0.0726 0.303 0.008" pos="0.0746 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
+      <geom name="conveyor_nest_3_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="-0.0746 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_nest_3_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="-0.0746 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <site name="conveyor_nest_3" group="4" type="box" size="0.0726 0.303 0.008" pos="-0.0746 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
+      <geom name="conveyor_nest_4_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="-0.2238 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_nest_4_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="-0.2238 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
+      <site name="conveyor_nest_4" group="4" type="box" size="0.0726 0.303 0.008" pos="-0.2238 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
+      <geom name="conveyor_pallet_rib_0" group="2" type="box" size="0.005 0.24 0.012" pos="0.2984 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_1" group="2" type="box" size="0.005 0.24 0.012" pos="0.1492 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_2" group="2" type="box" size="0.005 0.24 0.012" pos="0 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_3" group="2" type="box" size="0.005 0.24 0.012" pos="-0.1492 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_4" group="2" type="box" size="0.005 0.24 0.012" pos="-0.2984 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+    </body>
+    <!-- END generated by tools/make_conveyor_pallet.py -->
 
-         Short and wide (half-height 0.010, half-footprint 0.045) rather than the 0.025 cube
-         this started as: conveyor_handler.cc's drag force lands at the body's own origin, at
-         whatever height that is, while the belt's friction reaction acts down at the contact
-         plane -- the same lever-arm effect that tips a filing cabinet pushed at its middle
-         rather than its base. A tall cube's CoM sits far enough above the belt for that
-         torque to tip it end over end; a squat, wide puck's CoM barely clears the belt, so
-         the same push stays a push, not a tip, and it rides the belt flat the whole way
-         (checked standalone: a 0.025 cube drifted to a ~130 deg tumble under this force,
-         the 0.045x0.045x0.010 puck settled under 0.1 deg of rotation).
+    <!-- Four copies resting in the tray instead of the belt ("bir çok parça" -- the tray
+         replaces the table precisely to hold several at once, see above). Floor is also at
+         z=0.735, half-height 0.015, surface at 0.75 -- same resting plane as the belt, so
+         these still use the same z=0.799 and the same euler="-1.5708 1.57 0" roll the belt
+         parts use.
 
-         Rest height is 0.01 above the belt box's 0.70 top (its own half-height, not the
-         rollers'; the pucks are low enough to clear the roller bumps without resting on
-         them). Spread across the belt's width so they don't collide with each other
-         immediately.
+         Spread across x (the tray's 0.68 m width, x 1.49..2.17) at a fixed y=-0.80 (tray
+         centre): with this rotation the part's long axis (0.596 m) runs along y, which is why
+         only ONE row fits -- the tray's y half-size (0.45, grown from the table's 0.40
+         specifically for this) gives it 0.152 m (15 cm) of clearance on each side, comfortably
+         more than the old table's tight ~10 cm. The OTHER axis (0.135 m travel-footprint,
+         world x after this rotation) is the one with room to multiply: four centres 0.15 m
+         apart (1.605, 1.755, 1.905, 2.055) span 0.585 m total, leaving ~4.7 cm clearance to
+         the tray's near and far x walls -- real margin, not a packed-tight fit. A fifth didn't
+         fit without eating into that margin (5 at the same 0.15 m spacing needs 0.735 m, more
+         than the tray's 0.68 m), so four is what's here; a fifth is possible by tightening the
+         spacing, at the cost of that edge clearance.
 
-         A small amount of joint damping (0.5, on a free joint applying to all six dofs, not
-         just rotation) is layered on top of the squat shape: on the full 1.5 m run a rail
-         nudge or roller-height bump could still start a slow spin even with the lowered CoM
-         (measured up to ~23 deg over the run without this). At this belt's speed the damping
-         cuts steady-state travel speed by under 2% (checked: ~0.079 vs the configured 0.08
-         m/s) while holding peak in-transit rotation under 0.1 deg. -->
-    <body name="part_1" pos="-0.10 0.50 0.71">
-      <joint type="free" name="part_1_joint" damping="0.5"/>
-      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
+         damping="0.2" on all four, kept from the table version: the mesh's actual collision
+         shape is a hooked bracket, not a flat box, so it doesn't necessarily land on a
+         perfectly flat face when released, and the settling contact can kick it sideways. The
+         tray's rim (above) is the real fix for that kick travelling anywhere; this damping
+         just bleeds off the kick itself faster, so parts settle rather than jostling each
+         other over several seconds in a now-crowded tray. -->
+    <body name="part_tray_1" pos="1.605 -0.80 0.799" euler="-1.5708 1.57 0">
+      <joint type="free" name="part_tray_1_joint" damping="0.2"/>
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_2" pos="0.00 0.60 0.71">
-      <joint type="free" name="part_2_joint" damping="0.5"/>
-      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
+    <body name="part_tray_2" pos="1.755 -0.80 0.799" euler="-1.5708 1.57 0">
+      <joint type="free" name="part_tray_2_joint" damping="0.2"/>
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_3" pos="0.10 0.70 0.71">
-      <joint type="free" name="part_3_joint" damping="0.5"/>
-      <geom group="2" type="box" size="0.045 0.045 0.010" material="mat_part" mass="0.05"
+    <body name="part_tray_3" pos="1.905 -0.80 0.799" euler="-1.5708 1.57 0">
+      <joint type="free" name="part_tray_3_joint" damping="0.2"/>
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
+        contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
+    </body>
+    <body name="part_tray_4" pos="2.055 -0.80 0.799" euler="-1.5708 1.57 0">
+      <joint type="free" name="part_tray_4_joint" damping="0.2"/>
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
 

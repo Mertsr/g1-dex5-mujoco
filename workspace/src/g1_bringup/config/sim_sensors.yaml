@@ -102,3 +102,21 @@ conveyor:
   # it, in metres. Covers a settling bounce without reaching so high that a part lifted off
   # by the arm is still dragged.
   capture_height_m: 0.09
+
+  # The slotted pallet g1_conveyor_scene.xml carries (written by g1_bringup's
+  # tools/make_conveyor_pallet.py; nest clearance, count and load station live there, not
+  # here). It indexes one nest at a time: once a panel has sat in the nest at the load station,
+  # at rest and touched by no robot geom, for settle_s, the next empty nest is brought to the
+  # station; after the last one it runs to the belt's far end and stops. Anything above the
+  # pallet is left alone by the belt drag above. No-op in a scene without a pallet.
+  pallet:
+    enabled: true
+    # Peak speed of one index move (min-jerk profile, so it starts and stops smoothly).
+    speed_mps: 0.08
+    # How long a placed panel must sit still and untouched before the pallet moves on. Long
+    # enough that a hand still opening around it is not mistaken for a release.
+    settle_s: 1.0
+    # Slide-joint drive, N/m and N/(m/s), against the 10 kg pallet: ~20 rad/s, critically
+    # damped. Stiff enough that a robot leaning on the pallet barely moves it.
+    kp: 4000.0
+    kd: 400.0

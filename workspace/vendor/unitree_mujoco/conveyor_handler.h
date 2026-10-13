@@ -18,6 +18,12 @@
 // belt rotated in the scene drags along its rotated local +x, so moving or re-orienting the
 // belt in the MJCF never needs a matching code change.
 //
+// It also drives a slotted pallet when the scene has one (g1_bringup's
+// tools/make_conveyor_pallet.py writes it): a fixture on a slide joint, indexed one nest at a
+// time to a fixed load station as panels are placed, then run to the belt's end. Bodies above
+// the pallet are excluded from the belt drag, since the pallet carries them. See
+// conveyor_handler.cc's Pallet struct.
+//
 // On hardware this file never runs. The belt's own motor and friction do this job, and
 // speed/gain here are properties of the simulated zone, not of any real conveyor -- same
 // hardware re-validation list as grasp_weld's thresholds.
