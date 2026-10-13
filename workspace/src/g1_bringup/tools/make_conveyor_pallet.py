@@ -22,6 +22,10 @@ Names the simulator's conveyor handler looks up (do not rename without changing 
   conveyor_nest_<k>        box sites, one per nest, k = 1 at the downstream end; a panel whose
                            origin is inside one, at rest and untouched by the robot, fills it
   conveyor_load_station    world site the pallet indexes nests to
+
+Colours come from the scene's own materials -- tray_top_mat for the plate, rail_mat for the
+ribs -- so the pallet follows whatever palette the scene uses; the end blocks are white, like
+the real line's. Those two materials must exist in the scene.
 """
 
 import argparse
@@ -117,7 +121,7 @@ def build(clearance, nests, load_x):
         f'{pad}  <inertial pos="0 0 0" mass="{num(PALLET_MASS)}" diaginertia="0.4 0.4 0.8"/>',
         f'{pad}  <geom name="conveyor_pallet_plate" group="2" type="box" '
         f'size="{num(plate_half_x)} {num(plate_half_y)} {num(PLATE_HALF_T)}" '
-        f'rgba="0.62 0.64 0.66 1" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>',
+        f'material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>',
     ]
 
     block_z = PLATE_HALF_T + END_BLOCK_HALF_H
@@ -143,7 +147,7 @@ def build(clearance, nests, load_x):
         out.append(
             f'{pad}  <geom name="conveyor_pallet_rib_{r}" group="2" type="box" '
             f'size="{num(RIB_HALF_T)} {num(RIB_HALF_W)} {num(RIB_HALF_H)}" '
-            f'pos="{num(rx)} 0 {num(rib_z)}" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>'
+            f'pos="{num(rx)} 0 {num(rib_z)}" material="rail_mat" contype="1" conaffinity="1"/>'
         )
     out += [f"{pad}</body>", f"{pad}{END}"]
 

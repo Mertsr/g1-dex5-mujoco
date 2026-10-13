@@ -20,44 +20,74 @@
   <statistic center="0.6 0 0.6" extent="3.0"/>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <!-- Headlight given a small specular (was 0 0 0) so the new polished-steel rollers and
+         tray surface actually catch a highlight and read as metal rather than flat paint;
+         kept low (0.15) so nothing blows out. -->
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0.15 0.15 0.15"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="-130" elevation="-20" offwidth="1280" offheight="720"/>
   </visual>
 
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512"
-      height="3072"/>
-    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4"
-      rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <!-- Skybox: dropped the saturated blue for a neutral studio gradient (light grey top ->
+         near-black bottom), so the room reads as a product-render environment and the robot /
+         parts carry the colour instead of the backdrop. -->
+    <texture type="skybox" builtin="gradient" rgb1="0.55 0.58 0.62" rgb2="0.10 0.11 0.12"
+      width="512" height="3072"/>
+    <!-- Ground: was a saturated blue checker, now a low-contrast concrete grey. The checker is
+         kept (gives a sense of scale) but the two tones sit close together and the edge mark
+         is dimmed from near-white to a quiet grey, so the floor recedes instead of shouting. -->
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.30 0.31 0.33"
+      rgb2="0.24 0.25 0.27" markrgb="0.34 0.35 0.37" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5"
-      reflectance="0.2"/>
-    <material name="pedestal_mat" rgba="0.35 0.38 0.42 1"/>
-    <material name="belt_mat" rgba="0.12 0.12 0.12 1"/>
-    <!-- roller_mat: was a light silver (0.75 0.77 0.80), now black per Mert's request. Kept
-         the high specular/shininess (0.9/0.95) so it still reads as metal rather than matte
-         plastic -- a glossy black roller rather than a flat one. -->
-    <material name="roller_mat" rgba="0.05 0.05 0.05 1" specular="0.9" shininess="0.95"/>
-    <material name="rail_mat" rgba="0.55 0.56 0.58 1" specular="0.5" shininess="0.6"/>
-    <!-- chute_mat: split out from rail_mat so the discharge chute ("rampa") can go black
-         without also recoloring the rails and legs, which still share rail_mat and were not
-         asked to change. -->
-    <material name="chute_mat" rgba="0.05 0.05 0.05 1" specular="0.4" shininess="0.5"/>
-    <material name="basket_mat" rgba="0.45 0.30 0.12 1" specular="0.1" shininess="0.1"/>
-    <!-- mat_part: was orange (0.85 0.55 0.1), now white per Mert's request. Not pure 1 1 1 --
-         a touch under full white (0.92) with low specular so the part doesn't blow out to a
-         featureless glare under the scene's headlight; still reads as white. -->
+      reflectance="0.1"/>
+    <!-- pedestal_mat: now the anthracite "powder-coat" shared by the structural metalwork --
+         the tray's rim walls and legs. Darkened from the old mid-grey (0.35..0.42) to a deep
+         charcoal so the frame recedes and the bright steel surfaces pop against it. -->
+    <material name="pedestal_mat" rgba="0.15 0.16 0.18 1" specular="0.25" shininess="0.3"/>
+    <!-- tray_top_mat: split out so the tray's WORK SURFACE can be light brushed steel while
+         its rim/legs stay anthracite (pedestal_mat). Light enough that the white parts resting
+         on it still separate cleanly. -->
+    <material name="tray_top_mat" rgba="0.32 0.33 0.35 1" specular="0.5" shininess="0.5"/>
+    <!-- belt_mat: anthracite, matching pedestal_mat/rail_mat so all the dark frame metal reads
+         as one material. Only actually drawn on the frame channels (the belt box itself is
+         transparent). -->
+    <material name="belt_mat" rgba="0.15 0.16 0.18 1"/>
+    <!-- roller_mat: polished stainless. This is the hero surface of the scene, so it's a bright
+         near-silver with very high specular/shininess -- a glossy steel roller. NOTE: the 14
+         roller geoms below were previously pointed at pedestal_mat (so they rendered mid-grey);
+         they're repointed to this material now. (Supersedes the earlier "make rollers black"
+         note -- switched to steel for the quality look; flip this rgba back to ~0.05 if black
+         is wanted again.) -->
+    <material name="roller_mat" rgba="0.32 0.33 0.35 1" specular="0.95" shininess="0.9"/>
+    <!-- rail_mat: anthracite, same charcoal as pedestal_mat/belt_mat. Shared by the guide rails
+         and all six legs. (Was a light grey 0.55 -- darkened so the frame is one quiet dark
+         mass and the steel rollers are the only bright metal.) -->
+    <material name="rail_mat" rgba="0.15 0.16 0.18 1" specular="0.25" shininess="0.3"/>
+    <!-- chute_mat: kept as its own material (so it can diverge from the rails later) but set to
+         the same anthracite as the rest of the frame, so the discharge ramp reads as part of
+         the structure rather than a separate black slab. -->
+    <material name="chute_mat" rgba="0.15 0.16 0.18 1" specular="0.25" shininess="0.3"/>
+    <!-- basket_mat: the single accent colour in an otherwise neutral scene -- a deep industrial
+         blue (was carton-brown). One saturated focal point that plays cleanly off the white
+         parts and the steel. Swap rgba to ~0.85 0.42 0.10 for safety-orange instead. -->
+    <material name="basket_mat" rgba="0.12 0.33 0.60 1" specular="0.3" shininess="0.2"/>
+    <!-- mat_part: white (unchanged). Not pure 1 1 1 -- a touch under full white (0.92) with low
+         specular so the part doesn't blow out to a featureless glare under the scene's
+         headlight; still reads as white, and pops against the anthracite frame and blue basket. -->
     <material name="mat_part" rgba="0.92 0.92 0.92 1" specular="0.3" shininess="0.3"/>
 
     <!-- Stand-in for chain-link/wire-mesh fencing. MuJoCo has no wire-lattice primitive, so a
          fine checker texture at high repeat plus partial alpha is used on plain wall geoms
          instead of hundreds of individual wire-bar geoms; from any normal viewing distance it
          reads as mesh fencing rather than a solid wall, which is the point. Swap this for a
-         literal bar lattice later if a close-up, physically-accurate fence ever matters. -->
-    <texture type="2d" name="fence_tex" builtin="checker" mark="none" rgb1="0.55 0.56 0.58"
-      rgb2="0.70 0.71 0.73" width="64" height="64"/>
+         literal bar lattice later if a close-up, physically-accurate fence ever matters.
+         Darkened and made a touch more transparent (alpha 0.55 -> 0.50) so the fencing settles
+         into the background instead of competing with the equipment. -->
+    <texture type="2d" name="fence_tex" builtin="checker" mark="none" rgb1="0.38 0.39 0.41"
+      rgb2="0.30 0.31 0.33" width="64" height="64"/>
     <material name="fence_mat" texture="fence_tex" texuniform="true" texrepeat="60 20"
-      rgba="1 1 1 0.55" specular="0.3" shininess="0.3"/>
+      rgba="1 1 1 0.50" specular="0.3" shininess="0.3"/>
 
     <!-- Mert's real part (BSH_panel.stl), swapped in for the placeholder puck. `meshdir="meshes"`
          is set by g1_29dof.xml's own <compiler> tag (this scene is <include>-d into it, so
@@ -133,9 +163,12 @@
          part sliding toward the robot would otherwise walk straight off) plus both y sides.
          No far-x wall -- the room's own fence sits right there (1 cm beyond the floor's far
          edge) and already blocks that side; a redundant wall at that same 1 cm gap would
-         clip into it. -->
+         clip into it.
+
+         Colour: floor on tray_top_mat (light brushed steel) so the white parts read against
+         it; rim walls and legs on pedestal_mat (anthracite) with the rest of the frame. -->
     <geom name="tray_floor" group="2" type="box" size="0.34 0.45 0.015" pos="1.83 -0.80 0.735"
-      material="pedestal_mat" contype="1" conaffinity="1"/>
+      material="tray_top_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_near_x" group="2" type="box" size="0.01 0.45 0.03"
       pos="1.48 -0.80 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_y_min" group="2" type="box" size="0.34 0.01 0.03"
@@ -225,6 +258,8 @@
          conveyor_belt box still carries the actual contact). Each is a cylinder laid across
          the belt's width with `fromto`, radius 0.03, centred at z=0.72 so each roller's CREST
          lands at 0.75 -- exactly the resting plane / belt-box top -- same reasoning as before.
+         Material repointed from pedestal_mat to roller_mat (polished steel) -- these are the
+         scene's hero surface.
 
          y endpoints pushed back out from 0.535/0.665 to 0.28/0.92 (span 0.64 m, centred on
          0.60) to match the belt's new 0.66 m width: a couple cm narrower than the rails
@@ -290,7 +325,9 @@
          across the belt (world y), so whatever catches it falling off the end has to be at
          least that wide. 0.35 half-size (0.70 m total) gives it ~5 cm clearance on each side
          even if it doesn't land perfectly square. x (0.18 half, the other, 0.135 m-footprint
-         direction) is unchanged -- already generous for that axis. -->
+         direction) is unchanged -- already generous for that axis.
+
+         Colour: the one accent in the scene -- industrial blue (basket_mat). -->
     <geom name="basket_floor" group="2" type="box" size="0.18 0.35 0.01" pos="1.48 0.60 0.40"
       material="basket_mat" contype="1" conaffinity="1"/>
     <geom name="basket_wall_far" group="2" type="box" size="0.01 0.35 0.15" pos="1.66 0.60 0.56"
@@ -314,15 +351,17 @@
          start in the tray below; the robot carries them over and seats them one at a time at
          the load station. The block between the markers is generated -- change the nest
          clearance, count or load station with tools/make_conveyor_pallet.py, not by hand.
-         The three loose parts that used to ride the bare belt are gone: the pallet occupies
-         that stretch of belt, and a part placed there now has to go into a nest. -->
+         Its colours use this file's own materials (tray_top_mat plate, rail_mat ribs), so a
+         palette change here carries over to the pallet. The loose parts that used to ride the
+         bare belt are gone: the pallet occupies that stretch of belt, and a part placed there
+         now has to go into a nest. -->
     <!-- BEGIN generated by tools/make_conveyor_pallet.py -- do not edit by hand -->
     <!-- Slotted pallet, after the real line: 4 nests, clearance 2.0 mm per side, pitch 149.2 mm. Indexed by the conveyor handler: nest 1 starts at the load station; each time a panel settles in the nest there, untouched by the robot, the pallet advances one pitch; once the last nest is filled it runs to the belt's far end and stops. Regenerate with make_conveyor_pallet.py --clearance-mm 2 --nests 4 --load-x 0.4. -->
     <site name="conveyor_load_station" group="4" type="sphere" size="0.01" pos="0.4 0.6 0.8155" rgba="0.1 0.6 1 0.6"/>
     <body name="conveyor_pallet" pos="0.1762 0.6 0.762">
       <joint name="conveyor_pallet_slide" type="slide" axis="1 0 0" limited="true" range="0 0.7504" damping="20"/>
       <inertial pos="0 0 0" mass="10" diaginertia="0.4 0.4 0.8"/>
-      <geom name="conveyor_pallet_plate" group="2" type="box" size="0.3234 0.316 0.01" rgba="0.62 0.64 0.66 1" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>
+      <geom name="conveyor_pallet_plate" group="2" type="box" size="0.3234 0.316 0.01" material="tray_top_mat" contype="1" conaffinity="1" friction="0.8 0.01 0.0001"/>
       <geom name="conveyor_nest_1_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="0.2238 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_1_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="0.2238 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <site name="conveyor_nest_1" group="4" type="box" size="0.0726 0.303 0.008" pos="0.2238 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
@@ -335,11 +374,11 @@
       <geom name="conveyor_nest_4_block_a" group="2" type="box" size="0.03 0.008 0.025" pos="-0.2238 -0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <geom name="conveyor_nest_4_block_b" group="2" type="box" size="0.03 0.008 0.025" pos="-0.2238 0.308 0.035" rgba="0.95 0.95 0.95 1" contype="1" conaffinity="1"/>
       <site name="conveyor_nest_4" group="4" type="box" size="0.0726 0.303 0.008" pos="-0.2238 0 0.0535" rgba="0.2 0.9 0.3 0.25"/>
-      <geom name="conveyor_pallet_rib_0" group="2" type="box" size="0.005 0.24 0.012" pos="0.2984 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
-      <geom name="conveyor_pallet_rib_1" group="2" type="box" size="0.005 0.24 0.012" pos="0.1492 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
-      <geom name="conveyor_pallet_rib_2" group="2" type="box" size="0.005 0.24 0.012" pos="0 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
-      <geom name="conveyor_pallet_rib_3" group="2" type="box" size="0.005 0.24 0.012" pos="-0.1492 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
-      <geom name="conveyor_pallet_rib_4" group="2" type="box" size="0.005 0.24 0.012" pos="-0.2984 0 0.022" rgba="0.45 0.47 0.5 1" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_0" group="2" type="box" size="0.005 0.24 0.012" pos="0.2984 0 0.022" material="rail_mat" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_1" group="2" type="box" size="0.005 0.24 0.012" pos="0.1492 0 0.022" material="rail_mat" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_2" group="2" type="box" size="0.005 0.24 0.012" pos="0 0 0.022" material="rail_mat" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_3" group="2" type="box" size="0.005 0.24 0.012" pos="-0.1492 0 0.022" material="rail_mat" contype="1" conaffinity="1"/>
+      <geom name="conveyor_pallet_rib_4" group="2" type="box" size="0.005 0.24 0.012" pos="-0.2984 0 0.022" material="rail_mat" contype="1" conaffinity="1"/>
     </body>
     <!-- END generated by tools/make_conveyor_pallet.py -->
 
