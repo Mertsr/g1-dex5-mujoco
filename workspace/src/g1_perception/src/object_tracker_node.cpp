@@ -1,0 +1,417 @@
+#include "g1_perception/object_tracker_node.hpp"
+
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <chrono>
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <stdexcept>
+#include <utility>
+
+namespace g1_perception
+{
+namespace
+{
+
+Eigen::Isometry3f toEigen(const geometry_msgs::msg::Transform& t)
+{
+    Eigen::Isometry3f T = Eigen::Isometry3f::Identity();
+    T.linear()          = Eigen::Quaternionf(static_cast<float>(t.rotation.w), static_cast<float>(t.rotation.x),
+                                    static_cast<float>(t.rotation.y), static_cast<float>(t.rotation.z))
+                     .normalized()
+                     .toRotationMatrix();
+    T.translation() = Eigen::Vector3f(static_cast<float>(t.translation.x), static_cast<float>(t.translation.y),
+                                      static_cast<float>(t.translation.z));
+    return T;
+}
+
+geometry_msgs::msg::Pose toPose(const Eigen::Isometry3f& T)
+{
+    geometry_msgs::msg::Pose p;
+    p.position.x                = T.translation().x();
+    p.position.y                = T.translation().y();
+    p.position.z                = T.translation().z();
+    const Eigen::Quaternionf q(T.linear());
+    p.orientation.w = q.w();
+    p.orientation.x = q.x();
+    p.orientation.y = q.y();
+    p.orientation.z = q.z();
+    return p;
+}
+
+geometry_msgs::msg::Transform toTransform(const Eigen::Isometry3f& T)
+{
+    const auto                    p = toPose(T);
+    geometry_msgs::msg::Transform t;
+    t.translation.x = p.position.x;
+    t.translation.y = p.position.y;
+    t.translation.z = p.position.z;
+    t.rotation      = p.orientation;
+    return t;
+}
+
+// "package://<pkg>/<path>" -> the installed share path; anything else unchanged.
+std::string resolvePath(const std::string& path)
+{
+    const std::string scheme = "package://";
+    if (path.rfind(scheme, 0) != 0)
+    {
+        return path;
+    }
+    const std::string rest  = path.substr(scheme.size());
+    const auto        slash = rest.find('/');
+    if (slash == std::string::npos)
+    {
+        throw std::runtime_error("'" + path + "' names a package but no file inside it");
+    }
+    return ament_index_cpp::get_package_share_directory(rest.substr(0, slash)) + rest.substr(slash);
+}
+
+const char* stateName(ObjectTracker::State s) { return s == ObjectTracker::State::kTracking ? "tracking" : "searching"; }
+
+}  // namespace
+
+ObjectTrackerNode::ObjectTrackerNode(const rclcpp::NodeOptions& options)
+  : rclcpp::Node("g1_object_tracker", options)
+{
+    world_frame_  = declare_parameter<std::string>("world_frame", "odom");
+    output_frame_ = declare_parameter<std::string>("output_frame", "camera_color_optical_frame");
+    depth_scale_  = declare_parameter<double>("depth_scale", 0.001);
+    tf_timeout_s_ = declare_parameter<double>("tf_timeout_s", 0.05);
+    publish_tf_   = declare_parameter<bool>("publish_tf", true);
+    const auto depth_topic =
+        declare_parameter<std::string>("depth_topic", "/camera/aligned_depth_to_color/image_raw");
+    const auto info_topic =
+        declare_parameter<std::string>("info_topic", "/camera/aligned_depth_to_color/camera_info");
+
+    const auto t0 = std::chrono::steady_clock::now();
+    multi_        = std::make_unique<MultiTracker>(readObjects());
+    for (std::size_t i = 0; i < multi_->size(); ++i)
+    {
+        const auto& c = multi_->config(i);
+        RCLCPP_INFO(get_logger(), "object '%s': %s, %zu model points, %zu priors x %zu offsets", c.name.c_str(),
+                    c.model_path.c_str(), multi_->model(i).points().size(), c.priors.size(),
+                    c.params.prior_offsets.size());
+    }
+    RCLCPP_INFO(get_logger(), "models prepared in %.1f s",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+
+    tf_buffer_   = std::make_unique<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    if (publish_tf_)
+    {
+        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
+
+    // Keep-last 1: tracking wants the newest frame, never a backlog of old ones.
+    const auto sensor_qos = rclcpp::SensorDataQoS().keep_last(1);
+    info_sub_             = create_subscription<sensor_msgs::msg::CameraInfo>(
+        info_topic, rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::CameraInfo::SharedPtr msg) { onInfo(std::move(msg)); });
+    depth_sub_ = create_subscription<sensor_msgs::msg::Image>(
+        depth_topic, sensor_qos, [this](sensor_msgs::msg::Image::SharedPtr msg) { onDepth(std::move(msg)); });
+    detections_pub_ = create_publisher<vision_msgs::msg::Detection3DArray>("~/detections", rclcpp::SensorDataQoS());
+    status_pub_     = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", rclcpp::QoS(10));
+
+    RCLCPP_INFO(get_logger(), "tracking from %s in '%s', detections on %s in '%s'", depth_topic.c_str(),
+                world_frame_.c_str(), detections_pub_->get_topic_name(), output_frame_.c_str());
+}
+
+std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
+{
+    const auto names = declare_parameter<std::vector<std::string>>("objects", std::vector<std::string>{});
+    if (names.empty())
+    {
+        throw std::runtime_error("parameter 'objects' is empty: nothing to track");
+    }
+    // Shared by every object; each can override the ones that differ per part.
+    TrackerParams base;
+    base.max_points     = static_cast<int>(declare_parameter<int>("tracking.max_points", base.max_points));
+    base.min_ratio      = static_cast<float>(declare_parameter<double>("tracking.min_ratio", base.min_ratio));
+    base.min_coverage   = static_cast<float>(declare_parameter<double>("tracking.min_coverage", base.min_coverage));
+    base.max_violation  = static_cast<float>(declare_parameter<double>("tracking.max_violation", base.max_violation));
+    base.lost_after     = static_cast<int>(declare_parameter<int>("tracking.lost_after", base.lost_after));
+    base.global_after_s = declare_parameter<double>("tracking.global_after_s", base.global_after_s);
+    base.z_max          = static_cast<float>(declare_parameter<double>("tracking.z_max", base.z_max));
+    ModelOptions base_model;
+    base_model.voxel = static_cast<float>(declare_parameter<double>("model.voxel", base_model.voxel));
+
+    std::vector<ObjectConfig> out;
+    for (const auto& name : names)
+    {
+        ObjectConfig c;
+        c.name       = name;
+        c.params     = base;
+        c.model      = base_model;
+        c.model_path = resolvePath(declare_parameter<std::string>(name + ".model", ""));
+        if (c.model_path.empty())
+        {
+            throw std::runtime_error("object '" + name + "' has no '" + name + ".model'");
+        }
+        c.model.scale = static_cast<float>(declare_parameter<double>(name + ".model_scale", 1.0));
+        c.params.global_fallback = declare_parameter<bool>(name + ".global_fallback", true);
+
+        std::string error;
+        for (const auto& spec : declare_parameter<std::vector<std::string>>(name + ".priors", std::vector<std::string>{}))
+        {
+            const auto p = parseFramedPose(spec, error);
+            if (!p)
+            {
+                throw std::runtime_error(name + ".priors: " + error);
+            }
+            c.priors.push_back(*p);
+        }
+        c.params.prior_offsets.clear();
+        for (const auto& spec :
+             declare_parameter<std::vector<std::string>>(name + ".prior_offsets", std::vector<std::string>{}))
+        {
+            const auto p = parsePose(spec, error);
+            if (!p)
+            {
+                throw std::runtime_error(name + ".prior_offsets: " + error);
+            }
+            c.params.prior_offsets.push_back(*p);
+        }
+        const auto sweep = declare_parameter<std::string>(name + ".prior_sweep", "");
+        if (!sweep.empty())
+        {
+            const auto s = parseSweep(sweep, error);
+            if (!s)
+            {
+                throw std::runtime_error(name + ".prior_sweep: " + error);
+            }
+            c.params.prior_offsets.insert(c.params.prior_offsets.end(), s->begin(), s->end());
+        }
+        if (c.params.prior_offsets.empty())
+        {
+            c.params.prior_offsets.push_back(Eigen::Isometry3f::Identity());
+        }
+        const auto output = declare_parameter<std::string>(name + ".output_offset", "0 0 0");
+        const auto o      = parsePose(output, error);
+        if (!o)
+        {
+            throw std::runtime_error(name + ".output_offset: " + error);
+        }
+        c.model_T_output = *o;
+        if (c.priors.empty() && !c.params.global_fallback)
+        {
+            throw std::runtime_error("object '" + name + "' has neither priors nor global_fallback: it can never be found");
+        }
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+void ObjectTrackerNode::onInfo(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
+{
+    Intrinsics k;
+    k.fx = static_cast<float>(msg->k[0]);
+    k.cx = static_cast<float>(msg->k[2]);
+    k.fy = static_cast<float>(msg->k[4]);
+    k.cy = static_cast<float>(msg->k[5]);
+    k.width  = static_cast<int>(msg->width);
+    k.height = static_cast<int>(msg->height);
+    if (k.fx <= 0.0f || k.fy <= 0.0f || k.width <= 0 || k.height <= 0)
+    {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "ignoring camera_info without intrinsics");
+        return;
+    }
+    intrinsics_ = k;
+}
+
+std::optional<Eigen::Isometry3f> ObjectTrackerNode::lookup(const std::string& target, const std::string& source,
+                                                           const rclcpp::Time& stamp, double timeout_s)
+{
+    try
+    {
+        return toEigen(tf_buffer_->lookupTransform(target, source, stamp, tf2::durationFromSec(timeout_s)).transform);
+    }
+    catch (const tf2::TransformException&)
+    {
+        return std::nullopt;
+    }
+}
+
+void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
+{
+    if (!intrinsics_)
+    {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for camera_info");
+        return;
+    }
+    const Intrinsics& k = *intrinsics_;
+    DepthImage        depth;
+    namespace enc = sensor_msgs::image_encodings;
+    if (msg->encoding == enc::TYPE_32FC1)
+    {
+        depth.type = DepthImage::Type::kFloat32Metres;
+    }
+    else if (msg->encoding == enc::TYPE_16UC1 || msg->encoding == enc::MONO16)
+    {
+        depth.type      = DepthImage::Type::kUint16;
+        depth.u16_scale = static_cast<float>(depth_scale_);
+    }
+    else
+    {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "depth encoding '%s' is not 32FC1 or 16UC1",
+                              msg->encoding.c_str());
+        return;
+    }
+    if (msg->is_bigendian || static_cast<int>(msg->width) != k.width || static_cast<int>(msg->height) != k.height ||
+        static_cast<std::size_t>(msg->step) * msg->height > msg->data.size())
+    {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
+                              "depth image %ux%u (step %u, %zu bytes) does not match camera_info %dx%d", msg->width,
+                              msg->height, msg->step, msg->data.size(), k.width, k.height);
+        return;
+    }
+    depth.data       = msg->data.data();
+    depth.width      = k.width;
+    depth.height     = k.height;
+    depth.step_bytes = static_cast<int>(msg->step);
+
+    const rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
+    const auto world_T_cam = lookup(world_frame_, msg->header.frame_id, stamp, tf_timeout_s_);
+    if (!world_T_cam)
+    {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no transform %s -> %s at the image stamp; skipping",
+                             world_frame_.c_str(), msg->header.frame_id.c_str());
+        return;
+    }
+    // The core takes seconds as a double; counted from the first frame so they keep
+    // sub-microsecond resolution.
+    static const std::int64_t epoch_ns = stamp.nanoseconds();
+    const auto to_seconds = [](const rclcpp::Time& t) { return static_cast<double>(t.nanoseconds() - epoch_ns) * 1e-9; };
+    const auto clock_type = stamp.get_clock_type();
+    const auto frame_lookup = [&](const std::string& frame, double s) -> std::optional<Eigen::Isometry3f> {
+        const rclcpp::Time t(epoch_ns + static_cast<std::int64_t>(s * 1e9), clock_type);
+        return lookup(world_frame_, frame, t, 0.0);
+    };
+
+    const auto t0      = std::chrono::steady_clock::now();
+    const auto results = multi_->update(depth, k, to_seconds(stamp), *world_T_cam, msg->header.frame_id, frame_lookup);
+    const double frame_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+
+    // The detector's contract is the camera frame; when depth arrives in a different optical
+    // frame (the simulator labels its aligned depth camera_depth_optical_frame), re-express.
+    Eigen::Isometry3f out_T_cam = Eigen::Isometry3f::Identity();
+    if (msg->header.frame_id != output_frame_)
+    {
+        const auto t = lookup(output_frame_, msg->header.frame_id, stamp, tf_timeout_s_);
+        if (!t)
+        {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no transform %s -> %s; not publishing",
+                                 output_frame_.c_str(), msg->header.frame_id.c_str());
+            return;
+        }
+        out_T_cam = *t;
+    }
+
+    vision_msgs::msg::Detection3DArray array;
+    array.header.stamp    = msg->header.stamp;
+    array.header.frame_id = output_frame_;
+    for (const auto& r : results)
+    {
+        if (r.just_locked)
+        {
+            RCLCPP_INFO(get_logger(), "%s: locked (ratio %.2f, coverage %.2f, violation %.2f)", r.name.c_str(),
+                        r.out.score.ratio, r.out.score.coverage, r.out.score.violation);
+        }
+        if (r.just_lost)
+        {
+            RCLCPP_WARN(get_logger(), "%s: lost, searching again", r.name.c_str());
+        }
+        if (!r.valid)
+        {
+            continue;
+        }
+        const Eigen::Isometry3f pose = out_T_cam * r.cam_T_output;
+        vision_msgs::msg::Detection3D d;
+        d.header = array.header;
+        d.id     = r.name;
+        vision_msgs::msg::ObjectHypothesisWithPose h;
+        h.hypothesis.class_id = r.name;
+        h.hypothesis.score    = r.out.score.coverage;
+        h.pose.pose           = toPose(pose);
+        d.results.push_back(h);
+        Eigen::Isometry3f centre = pose;
+        centre.translation()     = pose * r.box_centre;
+        d.bbox.center            = toPose(centre);
+        d.bbox.size.x            = r.box_size.x();
+        d.bbox.size.y            = r.box_size.y();
+        d.bbox.size.z            = r.box_size.z();
+        array.detections.push_back(std::move(d));
+
+        if (tf_broadcaster_)
+        {
+            geometry_msgs::msg::TransformStamped t;
+            t.header.stamp    = msg->header.stamp;
+            t.header.frame_id = world_frame_;
+            t.child_frame_id  = "tracked/" + r.name;
+            t.transform       = toTransform(r.world_T_output);
+            tf_broadcaster_->sendTransform(t);
+        }
+    }
+    detections_pub_->publish(array);
+    publishStatus(array.header, results, frame_ms);
+}
+
+void ObjectTrackerNode::publishStatus(const std_msgs::msg::Header& header,
+                                      const std::vector<MultiTracker::Result>& results, double frame_ms)
+{
+    sum_ms_ += frame_ms;
+    max_ms_ = std::max(max_ms_, frame_ms);
+    ++frames_;
+    const rclcpp::Time now = get_clock()->now();
+    if (last_status_.nanoseconds() != 0 && (now - last_status_).seconds() < 0.5)
+    {
+        return;
+    }
+    const double period = last_status_.nanoseconds() != 0 ? (now - last_status_).seconds() : 0.0;
+    last_status_        = now;
+
+    diagnostic_msgs::msg::DiagnosticArray diag;
+    diag.header.stamp = header.stamp;
+    const auto kv     = [](const std::string& k, const std::string& v) {
+        diagnostic_msgs::msg::KeyValue p;
+        p.key   = k;
+        p.value = v;
+        return p;
+    };
+    diagnostic_msgs::msg::DiagnosticStatus frame;
+    frame.name        = "g1_object_tracker: frame";
+    frame.hardware_id = "g1_object_tracker";
+    frame.level       = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    frame.message     = "ok";
+    frame.values.push_back(kv("mean_ms", std::to_string(sum_ms_ / frames_)));
+    frame.values.push_back(kv("max_ms", std::to_string(max_ms_)));
+    if (period > 0.0)
+    {
+        frame.values.push_back(kv("input_hz", std::to_string(frames_ / period)));
+    }
+    diag.status.push_back(frame);
+    sum_ms_ = max_ms_ = 0.0;
+    frames_           = 0;
+
+    for (const auto& r : results)
+    {
+        diagnostic_msgs::msg::DiagnosticStatus s;
+        s.name        = "g1_object_tracker: " + r.name;
+        s.hardware_id = "g1_object_tracker";
+        const bool tracking = r.out.state == ObjectTracker::State::kTracking;
+        s.level   = r.valid ? diagnostic_msgs::msg::DiagnosticStatus::OK : diagnostic_msgs::msg::DiagnosticStatus::WARN;
+        s.message = r.valid ? "tracking" : (tracking ? "tracking, this frame rejected" : "searching");
+        s.values.push_back(kv("state", stateName(r.out.state)));
+        s.values.push_back(kv("inlier_ratio", std::to_string(r.out.score.ratio)));
+        s.values.push_back(kv("coverage", std::to_string(r.out.score.coverage)));
+        s.values.push_back(kv("violation", std::to_string(r.out.score.violation)));
+        s.values.push_back(kv("points", std::to_string(r.out.scene_points)));
+        s.values.push_back(kv("icp_iterations", std::to_string(r.out.icp.iterations)));
+        s.values.push_back(kv("ms", std::to_string(r.out.ms)));
+        diag.status.push_back(s);
+    }
+    status_pub_->publish(diag);
+}
+
+}  // namespace g1_perception

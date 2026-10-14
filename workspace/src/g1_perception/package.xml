@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>g1_perception</name>
+  <version>0.1.0</version>
+  <description>
+    Model-based 6D pose tracking of known parts (the line's pallet and panel) from the head
+    depth camera at camera rate: point-to-plane ICP against a precomputed nearest-neighbour
+    grid, verified against the depth image, initialised from configured priors with FPFH as
+    the fallback. Publishes what g1_object_pose_source's depth_tracker source consumes.
+  </description>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>eigen</depend>
+  <depend>libpcl-all-dev</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

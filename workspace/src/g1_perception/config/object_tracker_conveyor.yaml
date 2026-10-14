@@ -1,0 +1,68 @@
+# The model-based tracker for the conveyor line (g1_bringup/mjcf/g1_conveyor_scene.xml, and the
+# real line it copies). Loaded by g1_perception/launch/object_tracker.launch.py.
+#
+# Pose strings: "<frame> x y z [roll pitch yaw]" (metres, radians, RPY about fixed axes as in
+# ROS), where <frame> is a TF frame or another tracked object's name. See README.md.
+g1_object_tracker:
+  ros__parameters:
+    depth_topic: /camera/aligned_depth_to_color/image_raw
+    info_topic: /camera/aligned_depth_to_color/camera_info
+    # 16UC1 depth (a real RealSense) is multiplied by this to get metres; 32FC1 is metres already.
+    depth_scale: 0.001
+    # Poses are carried here between frames, so the head's motion is not mistaken for the
+    # parts'. Fixed, not on the robot.
+    world_frame: odom
+    # What g1_object_pose_source's depth_tracker source expects detections in.
+    output_frame: camera_color_optical_frame
+    # tracked/<name> frames under world_frame, for RViz.
+    publish_tf: true
+
+    # Fitted in this order, and each one's surface is removed from the depth before the next
+    # is fitted: the pallet first, so a panel seated in a nest with 2 mm clearance is not
+    # fitted to the nest's walls.
+    objects: ["pallet", "panel"]
+
+    pallet:
+      # Swap in the scanned PLY here (model_scale 0.001 if it is in millimetres). Its frame must
+      # be the one the priors below are written for.
+      model: package://g1_perception/models/bsh_pallet.stl
+      model_scale: 1.0
+      # Where the pallet sits at index 0: its station on the line, in odom. In the simulator odom
+      # starts at the world origin, so this is the scene's conveyor_pallet body. ON THE ROBOT
+      # this is the line's position in your map, so use the map frame here (and run
+      # localization), or update it whenever odom is reset.
+      priors: ["odom 0.1741 0.6 0.762 0 0 0"]
+      # The pallet indexes along its line, so where it is along x is unknown at start-up: try
+      # the station prior every 25 mm over the travel (0.75 m in the scene).
+      prior_sweep: "x 0.0 0.75 0.025"
+      # Reported pose = model pose * this. The sim body frame IS this model's frame.
+      output_offset: "0 0 0"
+
+    panel:
+      model: package://g1_perception/models/bsh_panel.stl
+      model_scale: 1.0
+      # The four nests, relative to the tracked pallet: wherever the pallet is, a panel seated in
+      # nest k is here. Measured from the simulator with the panel settled in nest 1, then
+      # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
+      # e.g. "right_hand_palm_link 0.0 0.0 0.05 0 0 0" -- the grasp, as the skill holds it.
+      priors:
+        - "pallet  0.2722 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "pallet  0.1216 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "pallet -0.0290 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "pallet -0.1796 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+      # The STL's frame differs from the scene's part body by the mesh refpos (0, 0.001,
+      # -0.046): report the body frame, so the skills see the same frame from this source as
+      # from simulator ground truth.
+      output_offset: "0 0.001 -0.046"
+
+    # Shared by every object.
+    tracking:
+      max_points: 3000        # ICP input per object per frame
+      min_ratio: 0.55         # scene points in the part's box that lie on it
+      min_coverage: 0.25      # visible model surface the depth confirms (a hand may cover some)
+      max_violation: 0.12     # visible model surface the camera sees PAST: it cannot be there
+      lost_after: 5           # bad frames in a row before searching again
+      global_after_s: 1.0     # priors alone this long, then FPFH over the whole frame as well
+      z_max: 3.0
+    model:
+      voxel: 0.003            # model sample spacing
