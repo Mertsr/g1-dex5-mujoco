@@ -65,6 +65,9 @@ public:
         Eigen::Vector3f        box_size   = Eigen::Vector3f::Zero();
         bool                   just_locked = false;
         bool                   just_lost   = false;
+        /// Debug only, while searching: every pose the prior search tries (priors x offsets),
+        /// camera frame.
+        std::vector<Eigen::Isometry3f> hypotheses;
     };
 
     /// Loads every model (seconds for a large one). Throws std::runtime_error naming the object
@@ -82,6 +85,10 @@ public:
     const ObjectConfig& config(std::size_t i) const { return objects_[i].config; }
     const ObjectModel&  model(std::size_t i) const { return objects_[i].tracker->model(); }
     void                reset();
+    /// Fill the debug parts of the results (points, verdicts, hypotheses). Costs a copy of the
+    /// fitted points per object per frame, so the node turns it on only while someone watches.
+    void                setDebug(bool on);
+    bool                debug() const { return debug_; }
 
 private:
     struct Object
@@ -94,6 +101,7 @@ private:
         bool                             was_tracking = false;
     };
     std::vector<Object> objects_;
+    bool                debug_ = false;
 };
 
 }  // namespace g1_perception

@@ -24,8 +24,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
 #include <vision_msgs/msg/detection3_d_array.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "g1_perception/multi_tracker.hpp"
 
@@ -43,6 +45,10 @@ private:
     void                             onDepth(const sensor_msgs::msg::Image::SharedPtr msg);
     std::optional<Eigen::Isometry3f> lookup(const std::string& target, const std::string& source,
                                             const rclcpp::Time& stamp, double timeout_s);
+    /// The three debug views (see README "Watching it work"). Built only while someone subscribes.
+    bool debugWanted() const;
+    void publishDebug(const sensor_msgs::msg::Image& msg, const DepthImage& depth, const Intrinsics& k,
+                      const Eigen::Isometry3f& world_T_cam, const std::vector<MultiTracker::Result>& results);
     void publishStatus(const std_msgs::msg::Header& header, const std::vector<MultiTracker::Result>& results,
                        double frame_ms);
 
@@ -62,6 +68,11 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr      info_sub_;
     rclcpp::Publisher<vision_msgs::msg::Detection3DArray>::SharedPtr   detections_pub_;
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr status_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr               debug_image_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr  debug_markers_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr         debug_points_pub_;
+    std::vector<std::string> mesh_urls_;    ///< per object, for RViz mesh markers
+    std::vector<double>      mesh_scales_;
     rclcpp::Time                                                       last_status_{ 0, 0, RCL_ROS_TIME };
     // Frame timing over the last status period, for the log line and the diagnostics.
     double sum_ms_ = 0.0, max_ms_ = 0.0;

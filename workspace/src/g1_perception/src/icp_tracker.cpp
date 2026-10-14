@@ -425,6 +425,7 @@ ObjectTracker::Output ObjectTracker::fit(const ObjectModel& model, const Tracker
     }
     out.scene_points = static_cast<int>(pts.size());
     out.cam_T_model  = init;
+    out.roi          = roi;
     if (pts.empty())
     {
         return out;
@@ -434,6 +435,28 @@ ObjectTracker::Output ObjectTracker::fit(const ObjectModel& model, const Tracker
     out.score       = scorePose(model, pts, out.cam_T_model, params.inlier_dist, params.box_margin);
     checkVisibility(model, depth, k, out.cam_T_model, params.free_space_tol, out.score);
     out.valid = accepted(params, out.score);
+    if (params.keep_debug)
+    {
+        const Eigen::Isometry3f   model_T_cam = out.cam_T_model.inverse();
+        const float               d2max       = params.inlier_dist * params.inlier_dist;
+        const Eigen::AlignedBox3f box(model.bounds().min() - Eigen::Vector3f::Constant(params.box_margin),
+                                      model.bounds().max() + Eigen::Vector3f::Constant(params.box_margin));
+        out.debug_inlier.resize(pts.size());
+        for (std::size_t i = 0; i < pts.size(); ++i)
+        {
+            // The same split the inlier ratio makes: outside the box says nothing.
+            const Eigen::Vector3f p = model_T_cam * pts[i];
+            if (!box.contains(p))
+            {
+                out.debug_inlier[i] = kDebugOutside;
+                continue;
+            }
+            const int idx       = model.nearest(p);
+            out.debug_inlier[i] = idx >= 0 && (p - model.points()[idx]).squaredNorm() <= d2max ? kDebugOnModel
+                                                                                                 : kDebugOffModel;
+        }
+        out.debug_points = std::move(pts);
+    }
     return out;
 }
 

@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "g1_perception/debug_render.hpp"
 #include "g1_perception/icp_tracker.hpp"
 #include "g1_perception/multi_tracker.hpp"
 #include "g1_perception/pose_spec.hpp"
@@ -335,4 +336,34 @@ TEST_F(Tracker, MultiTrackerResolvesPriorsAndReportsTheOutputFrame)
     EXPECT_TRUE(r[0].just_locked);
     EXPECT_LT(transErrMm(truePose() * c.model_T_output, r[0].world_T_output), 1.0);
     EXPECT_NEAR(r[0].box_size.x(), 0.30f, 0.01f);
+}
+
+TEST_F(Tracker, DebugViewMarksTheFitAndItsVerdicts)
+{
+    TrackerParams params;
+    params.keep_debug = true;
+    const auto d      = view(depth_, k_);
+    const auto out    = ObjectTracker::fit(*model_, params, params.icp_track, d, k_, truePose(), {});
+    ASSERT_TRUE(out.valid);
+    ASSERT_EQ(out.debug_points.size(), out.debug_inlier.size());
+    int on = 0;
+    for (const auto v : out.debug_inlier)
+    {
+        on += v == kDebugOnModel;
+    }
+    EXPECT_EQ(on, out.score.inliers);
+
+    std::vector<std::uint8_t> rgb;
+    int                       w = 0, h = 0;
+    renderDebugImage(d, k_, { { "part", model_.get(), &out, true, {} } }, params.free_space_tol, rgb, w, h);
+    EXPECT_GE(w, 640);
+    EXPECT_EQ(rgb.size(), static_cast<std::size_t>(w) * h * 3);
+    // The confirmed model surface is drawn in the object's colour.
+    const auto c       = debugColour(0);
+    long       painted = 0;
+    for (std::size_t i = 0; i < rgb.size(); i += 3)
+    {
+        painted += rgb[i] == c[0] && rgb[i + 1] == c[1] && rgb[i + 2] == c[2];
+    }
+    EXPECT_GT(painted, 500);
 }

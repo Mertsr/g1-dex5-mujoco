@@ -62,6 +62,15 @@ void MultiTracker::reset()
     }
 }
 
+void MultiTracker::setDebug(bool on)
+{
+    debug_ = on;
+    for (auto& o : objects_)
+    {
+        o.tracker->params().keep_debug = on;
+    }
+}
+
 std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, const Intrinsics& k, double stamp,
                                                        const Eigen::Isometry3f& world_T_cam,
                                                        const std::string& camera_frame, const FrameLookup& lookup)
@@ -136,6 +145,16 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
         r.valid        = tracking && r.out.valid;
         r.box_centre   = o.box_centre;
         r.box_size     = o.box_size;
+        if (debug_ && r.out.state == ObjectTracker::State::kSearching)
+        {
+            for (const auto& prior : ctx.priors)
+            {
+                for (const auto& off : o.tracker->params().prior_offsets)
+                {
+                    r.hypotheses.push_back(prior * off);
+                }
+            }
+        }
         if (r.valid)
         {
             o.world_T_model = world_T_cam * r.out.cam_T_model;

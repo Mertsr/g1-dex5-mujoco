@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 
+#include "g1_perception/debug_render.hpp"
 #include "g1_perception/multi_tracker.hpp"
 
 using namespace g1_perception;
@@ -199,6 +200,12 @@ int main(int argc, char** argv)
         return std::nullopt;
     };
 
+    // DEBUG_DIR=<dir>: also write the debug view (what the node publishes on ~/debug/image)
+    // every DEBUG_EVERY frames (default 10) as <dir>/NNNNN.ppm.
+    const char* debug_dir   = std::getenv("DEBUG_DIR");
+    const int   debug_every = std::getenv("DEBUG_EVERY") ? std::max(1, static_cast<int>(envf("DEBUG_EVERY"))) : 10;
+    mt.setDebug(debug_dir != nullptr);
+
     std::vector<float>           buf(static_cast<std::size_t>(k.width) * k.height);
     std::map<std::string, Stats> stats;
     double                       sum_frame_ms = 0, max_frame_ms = 0;
@@ -217,6 +224,22 @@ int main(int argc, char** argv)
         const double fms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ft0).count();
         sum_frame_ms += fms, max_frame_ms = std::max(max_frame_ms, fms);
+        if (debug_dir != nullptr && f % debug_every == 0)
+        {
+            std::vector<DebugObject> views;
+            for (std::size_t i = 0; i < results.size(); ++i)
+            {
+                views.push_back({ results[i].name, &mt.model(i), &results[i].out, results[i].valid, results[i].hypotheses });
+            }
+            std::vector<std::uint8_t> rgb;
+            int                       w = 0, h = 0;
+            renderDebugImage(d, k, views, mt.config(0).params.free_space_tol, rgb, w, h);
+            char path[512];
+            std::snprintf(path, sizeof path, "%s/%05d.ppm", debug_dir, f);
+            std::ofstream ppm(path, std::ios::binary);
+            ppm << "P6\n" << w << " " << h << "\n255\n";
+            ppm.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+        }
         bool searching = false;
         for (std::size_t i = 0; i < results.size(); ++i)
         {

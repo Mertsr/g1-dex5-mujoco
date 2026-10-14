@@ -191,6 +191,9 @@ struct TrackerParams
     /// restarting it back to back while a part is out of view would keep a core busy for nothing.
     double search_interval_s = 0.2;
     float explained_dist  = 0.004f; ///< see Explained
+    /// Keep each fit's points and per-point verdicts in the Output, for visualising what the
+    /// tracker sees. Off unless something is looking: it copies ~3000 points a frame.
+    bool  keep_debug      = false;
     /// Every prior is also tried shifted by each of these (model frame): a pallet whose index
     /// position is unknown is found by trying the prior along its travel.
     std::vector<Eigen::Isometry3f> prior_offsets{ Eigen::Isometry3f::Identity() };
@@ -245,6 +248,8 @@ struct FrameContext
     std::vector<Eigen::Isometry3f> fallbacks;
 };
 
+constexpr std::uint8_t kDebugOutside = 0, kDebugOnModel = 1, kDebugOffModel = 2;
+
 class ObjectTracker
 {
 public:
@@ -262,6 +267,14 @@ public:
         /// Tracking: which start won. 0 = the prediction, 1.. = fallbacks, then the last
         /// camera-frame pose, then the wide refit; -1 = none (this frame rejected).
         int               start_used = -1;
+        /// The image region the fit cut out (empty when nothing was fitted).
+        Roi               roi;
+        /// keep_debug only: the points ICP fitted (camera frame, other objects' points already
+        /// removed), and for each a verdict: kDebugOutside the model's box, kDebugOnModel
+        /// (within inlier_dist), or kDebugOffModel (in the box, off the surface: what lowers
+        /// the inlier ratio).
+        Points                    debug_points;
+        std::vector<std::uint8_t> debug_inlier;
     };
 
     ObjectTracker(std::string name, std::shared_ptr<const ObjectModel> model, TrackerParams params);

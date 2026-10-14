@@ -31,6 +31,27 @@ The simulator's camera now renders on its own thread at `camera_rate_hz` (30 Hz 
 `unitree_mujoco` after pulling. Its log line `[grove_g1] camera: X ms/frame (budget 33.3)` shows
 whether the machine keeps up.
 
+## Watching it work
+
+```bash
+ros2 launch g1_bringup bringup.launch.py world:=conveyor object_tracker:=true object_tracker_rviz:=true
+# or, beside a running tracker:
+rviz2 -d $(ros2 pkg prefix g1_perception)/share/g1_perception/rviz/perception.rviz
+# or just the picture:
+ros2 run rqt_image_view rqt_image_view /g1_object_tracker/debug/image
+```
+
+Three views, computed only while something subscribes to them:
+
+| Topic | Shows |
+| --- | --- |
+| `~/debug/image` | The depth image (near bright), and per object: the region it fitted; its model's camera-facing surface at the fitted pose, in the object's colour where the depth confirms it and **red** where the camera sees through it (what rejects a wrong pose); **magenta** fitted points inside the part's box that missed its surface (what lowers the inlier ratio); while searching, every pose being tried, as boxes. A status line per object at the top: `TRACK` / `REJECT` / `SEARCH`, inlier ratio, coverage, violation, points, time. |
+| `~/debug/markers` | In RViz's 3D view: each model's mesh where it was fitted (red when this frame's fit was rejected), a label with its scores, and the search boxes. |
+| `~/debug/points` | The points each fit used, in 3D: object colour on the model, magenta in its box but off it, grey outside it. |
+
+Offline, `icp_bench` writes the same image: `DEBUG_DIR=/tmp/view DEBUG_EVERY=5 icp_bench ...`
+gives `/tmp/view/NNNNN.ppm`.
+
 ## How it works
 
 Per frame, per object, in the configured order:
@@ -124,6 +145,8 @@ The easiest way is to let the tracker lock once from a hand-placed prior, then r
 | --- | --- |
 | `include/g1_perception/object_model.hpp` | Model loading (STL / PLY), sampling, NN grid (jump flooding), FPFH features. |
 | `include/g1_perception/icp_tracker.hpp` | ICP, scoring, verification, global search, `ObjectTracker`, `ConstantVelocity`. |
+| `include/g1_perception/debug_render.hpp` | The debug image: fits, verdicts and status drawn on the depth. |
+| `rviz/perception.rviz` | RViz on the debug views. |
 | `include/g1_perception/multi_tracker.hpp` | Several objects, order, explained points, priors through frames. What the node runs. |
 | `src/object_tracker_node.cpp` | The ROS node: messages and TF only. |
 | `tools/icp_bench.cpp` | Offline replay and grading against ground truth. |

@@ -4,9 +4,13 @@
 #include <chrono>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <cstring>
+#include <filesystem>
 #include <sensor_msgs/image_encodings.hpp>
 #include <stdexcept>
 #include <utility>
+
+#include "g1_perception/debug_render.hpp"
 
 namespace g1_perception
 {
@@ -112,6 +116,11 @@ ObjectTrackerNode::ObjectTrackerNode(const rclcpp::NodeOptions& options)
         depth_topic, sensor_qos, [this](sensor_msgs::msg::Image::SharedPtr msg) { onDepth(std::move(msg)); });
     detections_pub_ = create_publisher<vision_msgs::msg::Detection3DArray>("~/detections", rclcpp::SensorDataQoS());
     status_pub_     = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", rclcpp::QoS(10));
+    // What the tracker sees, for a person to watch. Nothing is computed for these until something
+    // subscribes, so leaving them advertised costs nothing.
+    debug_image_pub_   = create_publisher<sensor_msgs::msg::Image>("~/debug/image", rclcpp::QoS(1));
+    debug_markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/debug/markers", rclcpp::QoS(1));
+    debug_points_pub_  = create_publisher<sensor_msgs::msg::PointCloud2>("~/debug/points", rclcpp::QoS(1));
 
     RCLCPP_INFO(get_logger(), "tracking from %s in '%s', detections on %s in '%s'", depth_topic.c_str(),
                 world_frame_.c_str(), detections_pub_->get_topic_name(), output_frame_.c_str());
@@ -143,12 +152,18 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
         c.name       = name;
         c.params     = base;
         c.model      = base_model;
-        c.model_path = resolvePath(declare_parameter<std::string>(name + ".model", ""));
+        const auto model_param = declare_parameter<std::string>(name + ".model", "");
+        c.model_path           = resolvePath(model_param);
         if (c.model_path.empty())
         {
             throw std::runtime_error("object '" + name + "' has no '" + name + ".model'");
         }
         c.model.scale = static_cast<float>(declare_parameter<double>(name + ".model_scale", 1.0));
+        // RViz resolves package:// itself; anything else it needs as an absolute file:// URL.
+        mesh_urls_.push_back(model_param.rfind("package://", 0) == 0
+                                 ? model_param
+                                 : "file://" + std::filesystem::absolute(c.model_path).string());
+        mesh_scales_.push_back(c.model.scale);
         c.params.global_fallback = declare_parameter<bool>(name + ".global_fallback", true);
 
         std::string error;
@@ -288,6 +303,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         return lookup(world_frame_, frame, t, 0.0);
     };
 
+    multi_->setDebug(debugWanted());
     const auto t0      = std::chrono::steady_clock::now();
     const auto results = multi_->update(depth, k, to_seconds(stamp), *world_T_cam, msg->header.frame_id, frame_lookup);
     const double frame_ms =
@@ -368,6 +384,174 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
     }
     detections_pub_->publish(array);
     publishStatus(array.header, results, frame_ms);
+    if (multi_->debug())
+    {
+        publishDebug(*msg, depth, k, *world_T_cam, results);
+    }
+}
+
+bool ObjectTrackerNode::debugWanted() const
+{
+    return debug_image_pub_->get_subscription_count() > 0 || debug_markers_pub_->get_subscription_count() > 0 ||
+           debug_points_pub_->get_subscription_count() > 0;
+}
+
+void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const DepthImage& depth, const Intrinsics& k,
+                                     const Eigen::Isometry3f& world_T_cam,
+                                     const std::vector<MultiTracker::Result>& results)
+{
+    const auto colour = [](std::size_t i, float a) {
+        const auto            c = debugColour(i);
+        std_msgs::msg::ColorRGBA out;
+        out.r = c[0] / 255.0f, out.g = c[1] / 255.0f, out.b = c[2] / 255.0f, out.a = a;
+        return out;
+    };
+
+    // 1. The depth image with the fits drawn on it.
+    if (debug_image_pub_->get_subscription_count() > 0)
+    {
+        std::vector<DebugObject> views;
+        for (std::size_t i = 0; i < results.size(); ++i)
+        {
+            views.push_back({ results[i].name, &multi_->model(i), &results[i].out, results[i].valid,
+                              results[i].hypotheses });
+        }
+        auto img = std::make_unique<sensor_msgs::msg::Image>();
+        int  w = 0, h = 0;
+        renderDebugImage(depth, k, views, multi_->config(0).params.free_space_tol, img->data, w, h);
+        img->header   = msg.header;
+        img->width    = static_cast<std::uint32_t>(w);
+        img->height   = static_cast<std::uint32_t>(h);
+        img->encoding = sensor_msgs::image_encodings::RGB8;
+        img->step     = static_cast<std::uint32_t>(w * 3);
+        debug_image_pub_->publish(std::move(img));
+    }
+
+    // 2. RViz markers in the world frame: each model's mesh where it was fitted, a label, and
+    //    while searching, the boxes it is trying.
+    if (debug_markers_pub_->get_subscription_count() > 0)
+    {
+        visualization_msgs::msg::MarkerArray arr;
+        visualization_msgs::msg::Marker      clear;
+        clear.action = visualization_msgs::msg::Marker::DELETEALL;
+        arr.markers.push_back(clear);
+        int id = 0;
+        for (std::size_t i = 0; i < results.size(); ++i)
+        {
+            const auto& r = results[i];
+            visualization_msgs::msg::Marker base;
+            base.header.stamp    = msg.header.stamp;
+            base.header.frame_id = world_frame_;
+            base.ns              = r.name;
+            const bool tracking  = r.out.state == ObjectTracker::State::kTracking;
+            if (tracking)
+            {
+                const Eigen::Isometry3f world_T_model = world_T_cam * r.out.cam_T_model;
+                auto                    mesh          = base;
+                mesh.id                               = id++;
+                mesh.type                             = visualization_msgs::msg::Marker::MESH_RESOURCE;
+                mesh.mesh_resource                    = mesh_urls_[i];
+                mesh.pose                             = toPose(world_T_model);
+                mesh.scale.x = mesh.scale.y = mesh.scale.z = mesh_scales_[i];
+                // The object's colour when verified; red when this frame's fit was rejected.
+                mesh.color = colour(i, 0.75f);
+                if (!r.valid)
+                {
+                    mesh.color.r = 1.0f, mesh.color.g = 0.15f, mesh.color.b = 0.15f;
+                }
+                arr.markers.push_back(mesh);
+
+                auto label    = base;
+                label.id      = id++;
+                label.type    = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+                label.pose    = toPose(world_T_model);
+                label.pose.position.z += 0.5 * r.box_size.maxCoeff() + 0.05;
+                label.scale.z = 0.04;
+                label.color   = colour(i, 1.0f);
+                char text[160];
+                std::snprintf(text, sizeof text, "%s %s\nratio %.2f cov %.2f viol %.2f", r.name.c_str(),
+                              r.valid ? "TRACK" : "REJECT", r.out.score.ratio, r.out.score.coverage,
+                              r.out.score.violation);
+                label.text = text;
+                arr.markers.push_back(label);
+            }
+            if (!r.hypotheses.empty())
+            {
+                auto boxes  = base;
+                boxes.id    = id++;
+                boxes.type  = visualization_msgs::msg::Marker::LINE_LIST;
+                boxes.pose.orientation.w = 1.0;
+                boxes.scale.x            = 0.002;
+                boxes.color              = colour(i, 0.5f);
+                static const int edges[12][2] = { { 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 }, { 4, 5 }, { 5, 7 },
+                                                  { 7, 6 }, { 6, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+                const auto& bounds = multi_->model(i).bounds();
+                for (const auto& hyp : r.hypotheses)
+                {
+                    const Eigen::Isometry3f T = world_T_cam * hyp;
+                    for (const auto& e : edges)
+                    {
+                        for (int end = 0; end < 2; ++end)
+                        {
+                            const Eigen::Vector3f p =
+                                T * bounds.corner(static_cast<Eigen::AlignedBox3f::CornerType>(e[end]));
+                            geometry_msgs::msg::Point q;
+                            q.x = p.x(), q.y = p.y(), q.z = p.z();
+                            boxes.points.push_back(q);
+                        }
+                    }
+                }
+                arr.markers.push_back(boxes);
+            }
+        }
+        debug_markers_pub_->publish(arr);
+    }
+
+    // 3. The points each fit used, in the camera frame: the object's colour on the model,
+    //    magenta in its box but off it, grey outside its box.
+    if (debug_points_pub_->get_subscription_count() > 0)
+    {
+        std::size_t n = 0;
+        for (const auto& r : results)
+        {
+            n += r.out.debug_points.size();
+        }
+        auto cloud             = std::make_unique<sensor_msgs::msg::PointCloud2>();
+        cloud->header          = msg.header;
+        cloud->height          = 1;
+        cloud->width           = static_cast<std::uint32_t>(n);
+        cloud->is_bigendian    = false;
+        cloud->is_dense        = true;
+        cloud->point_step      = 16;
+        cloud->row_step        = cloud->point_step * cloud->width;
+        const char* names[4]   = { "x", "y", "z", "rgb" };
+        for (std::uint32_t f = 0; f < 4; ++f)
+        {
+            sensor_msgs::msg::PointField field;
+            field.name     = names[f];
+            field.offset   = 4 * f;
+            field.datatype = sensor_msgs::msg::PointField::FLOAT32;
+            field.count    = 1;
+            cloud->fields.push_back(field);
+        }
+        cloud->data.resize(static_cast<std::size_t>(cloud->row_step));
+        std::uint8_t* out = cloud->data.data();
+        for (std::size_t i = 0; i < results.size(); ++i)
+        {
+            const auto&    r  = results[i];
+            const auto     c  = debugColour(i);
+            const std::uint32_t on  = (static_cast<std::uint32_t>(c[0]) << 16) | (c[1] << 8) | c[2];
+            const std::uint32_t off = 0xff00c8, outside = 0x606060;
+            for (std::size_t p = 0; p < r.out.debug_points.size(); ++p, out += 16)
+            {
+                std::memcpy(out, r.out.debug_points[p].data(), 12);
+                const std::uint8_t v   = r.out.debug_inlier[p];
+                const std::uint32_t rgb = v == kDebugOnModel ? on : (v == kDebugOffModel ? off : outside);
+                std::memcpy(out + 12, &rgb, 4);
+            }
+        }
+        debug_points_pub_->publish(std::move(cloud));
+    }
 }
 
 void ObjectTrackerNode::publishStatus(const std_msgs::msg::Header& header,

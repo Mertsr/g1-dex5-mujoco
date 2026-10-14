@@ -324,6 +324,7 @@ def _setup(context, *args, **kwargs):
                 launch_arguments={
                     "config": LaunchConfiguration("object_tracker_config").perform(context)
                     or os.path.join(_perception_share(), "config", "object_tracker_conveyor.yaml"),
+                    "rviz": LaunchConfiguration("object_tracker_rviz"),
                 }.items(),
             )
         )
@@ -466,6 +467,12 @@ def generate_launch_description():
             default_value="false",
             description="Start g1_perception's object tracker (forces sensors:=true). Implied by "
             "manipulation:=true object_source:=depth_tracker.",
+        ),
+        DeclareLaunchArgument(
+            "object_tracker_rviz",
+            default_value="false",
+            description="Open a second RViz on the tracker's debug views: the depth image with "
+            "the fits drawn on it, the fitted meshes and the points each fit used.",
         ),
         DeclareLaunchArgument(
             "object_tracker_config",
