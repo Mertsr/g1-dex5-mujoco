@@ -18,6 +18,7 @@
 #include <array>
 #include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -82,6 +83,16 @@ public:
             declare_parameter<std::string>(
                 "depth_info_topic",
                 "/camera/aligned_depth_to_color/camera_info"),
+            rclcpp::SensorDataQoS());
+        // Half resolution, every other pixel (no averaging: a mean across a depth edge is a
+        // point on neither surface). 0.4 MB a frame instead of 1.6 MB, for consumers that need
+        // geometry rather than pixels -- the object tracker fits ~3000 points a frame. Built and
+        // sent only while someone subscribes.
+        depth_half_pub_ = create_publisher<sensor_msgs::msg::Image>(
+            declare_parameter<std::string>("depth_half_topic", "/camera/depth_half/image_raw"),
+            rclcpp::SensorDataQoS());
+        depth_half_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
+            declare_parameter<std::string>("depth_half_info_topic", "/camera/depth_half/camera_info"),
             rclcpp::SensorDataQoS());
         color_pub_ = create_publisher<sensor_msgs::msg::Image>(
             declare_parameter<std::string>("color_topic", "/camera/color/image_raw"),
@@ -430,6 +441,34 @@ private:
         // Captured before publish: img is a null pointer afterwards, only ownership moves.
         const auto render_stamp = img->header.stamp;
 
+        if (depth_half_pub_->get_subscription_count() > 0)
+        {
+            auto half             = std::make_unique<sensor_msgs::msg::Image>();
+            half->header          = img->header;
+            half->width           = frame.width / 2;
+            half->height          = frame.height / 2;
+            half->encoding        = "32FC1";
+            half->is_bigendian    = 0;
+            half->step            = half->width * sizeof(float);
+            half->data.resize(static_cast<std::size_t>(half->step) * half->height);
+            auto* out = reinterpret_cast<float*>(half->data.data());
+            for (std::uint32_t v = 0; v < half->height; ++v)
+            {
+                for (std::uint32_t u = 0; u < half->width; ++u)
+                {
+                    out[v * half->width + u] = frame.depth[(2 * v) * frame.width + 2 * u];
+                }
+            }
+            // Pixel (u, v) here is pixel (2u, 2v) there, so every intrinsic halves.
+            sensor_msgs::msg::CameraInfo half_info = info;
+            half_info.width                        = half->width;
+            half_info.height                       = half->height;
+            half_info.k                            = { f / 2, 0, cx / 2, 0, f / 2, cy / 2, 0, 0, 1 };
+            half_info.p                            = { f / 2, 0, cx / 2, 0, 0, f / 2, cy / 2, 0, 0, 0, 1, 0 };
+            depth_half_pub_->publish(std::move(half));
+            depth_half_info_pub_->publish(half_info);
+        }
+
         depth_pub_->publish(std::move(img));
         depth_info_pub_->publish(info);
 
@@ -572,6 +611,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr      cloud_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr    pose_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr            depth_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr            depth_half_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr       depth_half_info_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr            color_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr       info_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr       depth_info_pub_;

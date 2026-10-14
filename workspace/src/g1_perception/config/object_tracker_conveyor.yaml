@@ -5,8 +5,11 @@
 # ROS), where <frame> is a TF frame or another tracked object's name. See README.md.
 g1_object_tracker:
   ros__parameters:
-    depth_topic: /camera/aligned_depth_to_color/image_raw
-    info_topic: /camera/aligned_depth_to_color/camera_info
+    # The simulator's half-resolution depth (424x240, 0.4 MB a frame): the tracker fits ~3000
+    # points a frame either way, and the full image is four times the DDS traffic. On the robot,
+    # point these at the RealSense's aligned depth (or run it at 424x240).
+    depth_topic: /camera/depth_half/image_raw
+    info_topic: /camera/depth_half/camera_info
     # 16UC1 depth (a real RealSense) is multiplied by this to get metres; 32FC1 is metres already.
     depth_scale: 0.001
     # Poses are carried here between frames, so the head's motion is not mistaken for the
