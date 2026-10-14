@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <thread>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +27,13 @@ namespace g1_perception
 {
 namespace
 {
+
+// Model preparation runs while the rest of the stack is starting: the controllers, the
+// simulator, move_group. Half the cores, never all of them.
+int prepThreads()
+{
+    return static_cast<int>(std::max(1u, std::thread::hardware_concurrency() / 2));
+}
 
 std::string lower(std::string s)
 {
@@ -254,6 +262,7 @@ std::shared_ptr<const ObjectModel> ObjectModel::load(const std::string& path, co
         }
         pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne;
         pcl::PointCloud<pcl::Normal>                         normals;
+        ne.setNumberOfThreads(static_cast<unsigned>(prepThreads()));
         ne.setInputCloud(cloud);
         ne.setKSearch(16);
         ne.compute(normals);
@@ -349,7 +358,7 @@ void ObjectModel::prepare()
     std::vector<int> next(ncells);
     for (const int st : steps)
     {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(prepThreads())
         for (long iz = 0; iz < dims_[2]; ++iz)
         {
             for (long iy = 0; iy < dims_[1]; ++iy)
@@ -411,7 +420,7 @@ void ObjectModel::prepare()
 
     // Twins across thin walls.
     twin_.assign(points_.size(), -1);
-#pragma omp parallel
+#pragma omp parallel num_threads(prepThreads())
     {
         pcl::KdTreeFLANN<pcl::PointXYZ> tree;
         tree.setInputCloud(cloud);
@@ -452,6 +461,7 @@ void ObjectModel::prepare()
     }
     features_.reset(new FeatureCloud);
     pcl::FPFHEstimationOMP<pcl::PointNormal, pcl::PointNormal, pcl::FPFHSignature33> fpfh;
+    fpfh.setNumberOfThreads(static_cast<unsigned>(prepThreads()));
     fpfh.setInputCloud(feature_cloud_);
     fpfh.setInputNormals(feature_cloud_);
     fpfh.setRadiusSearch(options_.feature_radius);

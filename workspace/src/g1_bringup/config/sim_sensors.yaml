@@ -29,16 +29,11 @@ socket_path: "/tmp/g1_sensors.sock"
 # 11.5 ms with colour, of which only ~0.04 ms holds the sim lock; the rest is the render and
 # the socket write, both off-lock.
 camera_enabled: true
-# 30 Hz like a real D435i, independent of the sweep's rate_hz above. The model-based tracker
-# (g1_perception) is built for this rate: at 10 Hz a pallet indexing at 0.15 m/s moves 15 mm
-# between frames. The log line "[grove_g1] camera: X ms/frame (budget Y)" shows whether the
-# machine keeps up; if X approaches Y, turn colour off or lower the rate.
-camera_rate_hz: 30.0
-# Colour with every depth frame. Off: depth alone is 1.6 MB a frame against 2.9 MB with colour,
-# and at 30 Hz colour would push ~90 MB/s through the relay and DDS on the same machine as the
-# controllers. The tracker uses depth only. Turn it on for an RViz camera view or a colour
-# consumer (and lower camera_rate_hz if service calls start timing out).
-camera_rgb: false
+# Same load as before the camera got its own thread: 10 Hz with colour. 30 Hz depth-only
+# (camera_rate_hz: 30.0, camera_rgb: false) is what the object tracker is built for, but it is
+# opt-in until it has been shown not to starve the controllers of DDS on the same machine.
+camera_rate_hz: 10.0
+camera_rgb: true
 
 # Ground-truth poses for the manipulable objects, sampled on the same cycle as the sweep and
 # sent ahead of it. SIMULATION ONLY: this is the stand-in for a perception pipeline, and
