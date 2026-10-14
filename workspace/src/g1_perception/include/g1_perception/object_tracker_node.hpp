@@ -78,6 +78,11 @@ private:
     rclcpp::TimerBase::SharedPtr debug_timer_;
     std::string                  depth_topic_, info_topic_;
     std::chrono::steady_clock::time_point last_depth_{};
+    /// Per object, named poses in its OUTPUT frame: where a hand takes it (grasps) and where
+    /// another object sits on it (slots). Published as extra hypotheses on each detection,
+    /// "<object>/grasp/<name>" and "<object>/slot/<name>", so they travel through /objects with
+    /// the object's own pose and stamp.
+    std::vector<std::vector<FramedPose>> grasps_, slots_;
     std::vector<std::string> mesh_urls_;    ///< per object, for RViz mesh markers
     std::vector<double>      mesh_scales_;
     rclcpp::Time                                                       last_status_{ 0, 0, RCL_ROS_TIME };

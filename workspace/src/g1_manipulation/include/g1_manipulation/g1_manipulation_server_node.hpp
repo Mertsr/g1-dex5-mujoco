@@ -26,6 +26,8 @@
 #include <g1_msgs/action/set_arm_posture.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <map>
+#include <utility>
 #include <memory>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <moveit_msgs/msg/collision_object.hpp>
@@ -36,6 +38,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
+#include <tf2/LinearMath/Transform.h>
 #include <vector>
 #include <vision_msgs/msg/detection3_d_array.hpp>
 
@@ -57,6 +60,23 @@ struct ArmContext
 
 /// False if `arm` is neither "left" nor "right", leaving `out` untouched.
 bool resolveArm(const std::string& arm, ArmContext& out);
+
+/// The pose a hand's grasp frame takes for an object grasp pose. A published grasp is the RIGHT
+/// hand's grasp frame at the grasp (x along the fingers, closing toward +y, thumb on +z); the left
+/// hand closes toward its own -y, so it takes the same pose turned half a turn about x.
+geometry_msgs::msg::Pose handGoalFromGrasp(const geometry_msgs::msg::Pose& grasp, bool is_left);
+
+/// `pose` moved `distance` back along its own -x: for a grasp frame, out along the fingers'
+/// reverse -- where the straight-line approach starts and the retreat ends.
+geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double distance);
+
+/// The pose a detection carries under `class_id` among its results (object pose first, then the
+/// grasps and slots a tracker adds), or nothing.
+std::optional<geometry_msgs::msg::Pose> findHypothesis(
+    const vision_msgs::msg::Detection3D& detection, const std::string& class_id);
+/// The first result whose class_id starts with `prefix`, with that class_id.
+std::optional<std::pair<std::string, geometry_msgs::msg::Pose>> findHypothesisPrefix(
+    const vision_msgs::msg::Detection3D& detection, const std::string& prefix);
 
 class G1ManipulationServer : public rclcpp::Node
 {
@@ -110,6 +130,12 @@ private:
         MoveGroup& group, const geometry_msgs::msg::Pose& pose, const std::string& link,
         const std::string& what);
     bool moveToNamed(MoveGroup& group, const std::string& named_target);
+    /// A straight-line move of `link` to `pose` (Cartesian path), time-parameterised at the
+    /// skills' velocity scaling. For the last centimetres into and out of a grasp, where a
+    /// free-space plan may swing through the parts packed beside the target.
+    bool moveLinear(
+        MoveGroup& group, const geometry_msgs::msg::Pose& pose, const std::string& link,
+        const std::string& what);
 
     /// Puts the object into the planning scene at its measured pose, already transformed into
     /// the planning frame, so plans route around it. Returns what it built: the world copy is
@@ -170,6 +196,15 @@ private:
     // orientation is a choice, and it is the one thing that depends on the surface rather than
     // on the hand.
     std::vector<double> grasp_rpy_;
+
+    // Object grasps published with the object pose (see handGoalFromGrasp).
+    double grasp_approach_m_{ 0.12 };  ///< straight-line approach and retreat length
+    double linear_min_fraction_{ 0.95 };
+    /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
+    /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
+    std::mutex                              held_mutex_;
+    std::map<std::string, tf2::Transform>   held_grasp_;
+    std::map<std::string, std::string>      held_arm_;
 };
 
 }  // namespace g1_manipulation

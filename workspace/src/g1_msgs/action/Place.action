@@ -4,7 +4,9 @@
 # target surface, and only the server knows how the object is currently held. It is transformed
 # into the planning frame on arrival, so a goal in odom survives the robot having walked.
 
-# Put the held object down on top of this detected surface, ignoring `pose`. Prefer this to a
+# Put the held object down on top of this detected surface, ignoring `pose`. A name of the form
+# "<object>/slot/<slot>" (e.g. "pallet/slot/nest_2") is a slot a detection publishes: the held
+# object is put exactly at that pose, held as it was grasped, rather than stood on top. Prefer this to a
 # fixed coordinate, because a fixed coordinate is written in the map frame and the base approach
 # parks the robot against the object stream, which is published in odom. AMCL has been measured
 # 0.23 m apart from odom mid-mission, against an arm whose lateral window is 0.04 m -- so a map
@@ -14,8 +16,10 @@ string surface_object_id
 
 # Where the object should end up, used only when surface_object_id is empty.
 geometry_msgs/PoseStamped pose
+# "auto" uses the hand that picked the held object.
 string ARM_LEFT=left
 string ARM_RIGHT=right
+string ARM_AUTO=auto
 string arm
 ---
 bool success

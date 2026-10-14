@@ -60,6 +60,31 @@ Every `Pick` failure path leaves the hand open and nothing attached, so a retry 
 defined state rather than part-way into a grasp — that is what makes the behavior tree's retry
 meaningful rather than a replay.
 
+## Objects that publish their own grasp
+
+A detection may carry more than its pose. `g1_perception`'s tracker adds, after the object's own
+result:
+
+- `<object>/grasp/<name>`: where a hand takes it. `Pick` uses the first one it finds instead of the
+  bounding-box top grasp below. The pose is the RIGHT hand's grasp frame at the grasp (x along the
+  fingers, which is the approach direction; fingers closing toward +y; thumb on +z), and the left
+  hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
+  (0.12) back along the fingers, then straight in on a Cartesian path, closes, and lifts straight
+  up. It does not take a free-space plan, because a free-space plan may swing the fingers through
+  the parts packed beside the target.
+- `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
+  with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
+  remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the
+  retreat are straight lines along the grasp's approach.
+
+`arm: auto` picks with the hand on the grasp point's side of the pelvis, and places with the hand
+that picked.
+
+```bash
+ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel, arm: auto}" --feedback
+ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_2, arm: auto}" --feedback
+```
+
 ## Where the hand grips
 
 Not a number in this package. `{side}_hand_grasp_frame` is a link in `g1_description`, and pose

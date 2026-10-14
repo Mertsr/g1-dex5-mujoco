@@ -40,6 +40,15 @@ g1_object_tracker:
       prior_sweep: "x 0.0 0.75 0.025"
       # Reported pose = model pose * this. The sim body frame IS this model's frame.
       output_offset: "0 0 0"
+      # Where a panel's BODY frame sits when seated in each nest, in the pallet's frame. Published
+      # as pallet/slot/nest_<k> on /objects; Place with surface_object_id "pallet/slot/nest_2"
+      # puts the held panel exactly there. Same measurement as the panel's nest priors below,
+      # carried from the STL frame to the body frame.
+      slots:
+        - "nest_1  0.2262 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "nest_2  0.0756 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "nest_3 -0.0750 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "nest_4 -0.2256 0.0 0.0614 -1.5930 -0.0006 -1.5700"
 
     panel:
       model: package://g1_perception/models/bsh_panel.stl
@@ -48,7 +57,15 @@ g1_object_tracker:
       # nest k is here. Measured from the simulator with the panel settled in nest 1, then
       # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
       # e.g. "right_hand_palm_link 0.0 0.0 0.05 0 0 0" -- the grasp, as the skill holds it.
+      #
+      # Then the tray beside the line (the scene's part_tray_1..4, in odom). Several priors in
+      # view at once is fine: the search keeps the one the depth confirms best, and one panel is
+      # tracked at a time.
       priors:
+        - "odom 1.6510 -0.8 0.800 -1.5708 0.0 -1.5700"
+        - "odom 1.8010 -0.8 0.800 -1.5708 0.0 -1.5700"
+        - "odom 1.9510 -0.8 0.800 -1.5708 0.0 -1.5700"
+        - "odom 2.1010 -0.8 0.800 -1.5708 0.0 -1.5700"
         - "pallet  0.2722 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet  0.1216 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet -0.0290 0.0 0.0614 -1.5930 -0.0006 -1.5700"
@@ -57,6 +74,22 @@ g1_object_tracker:
       # -0.046): report the body frame, so the skills see the same frame from this source as
       # from simulator ground truth.
       output_offset: "0 0.001 -0.046"
+      # Where the hand takes the panel, in its BODY frame: published as panel/grasp/<name> on
+      # /objects (and as the tracked/panel/grasp/<name> TF frame), and what Pick plans to.
+      #
+      # The pose is the RIGHT hand's grasp frame at the grasp (x along the fingers = the approach
+      # direction, fingers closing toward +y, thumb on +z); the left hand mirrors it.
+      #
+      # edge_high: the panel's tall long edge, at its middle -- the side opposite the round
+      # boss's near edge. Panels sit back to back in the nests and on the tray, so the hand
+      # comes from ABOVE: fingers pointing down past the outside of the edge wall (it stands
+      # ~24 mm above the neighbour's low edge), curling in under the lip, thumb on the top face.
+      # In the panel's world-aligned axes the hand closes at x = -60 mm (8 mm inside the wall's
+      # outer face at -68), y = 0, z = +50 mm; this line is the same pose in its body frame.
+      # FIRST GUESS from the CAD, not a measured grip: check it in RViz (rviz/perception.rviz
+      # draws it as a gripper) and adjust before trusting a pick.
+      grasps:
+        - "edge_high  0.0 -0.050 -0.060  1.5708 0.0 1.5708"
 
     # Shared by every object.
     tracking:

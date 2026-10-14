@@ -132,3 +132,39 @@ int main(int argc, char** argv)
     ::testing::InitGoogleMock(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// A published object grasp is the RIGHT hand's grasp frame; the left takes it turned half a turn
+// about the fingers, so both hands' fingers point the same way and close toward the same side.
+TEST(ObjectGrasp, LeftHandMirrorsAboutTheFingers)
+{
+    geometry_msgs::msg::Pose grasp = objectAt(0.3, 0.2, 0.1);
+    tf2::Quaternion          q;
+    q.setRPY(0.3, -0.2, 0.7);
+    grasp.orientation = tf2::toMsg(q);
+
+    const auto right = g1_manipulation::handGoalFromGrasp(grasp, false);
+    const auto left  = g1_manipulation::handGoalFromGrasp(grasp, true);
+    EXPECT_DOUBLE_EQ(right.position.x, 0.3);
+    EXPECT_DOUBLE_EQ(left.position.z, 0.1);
+
+    tf2::Quaternion qr, ql;
+    tf2::fromMsg(right.orientation, qr);
+    tf2::fromMsg(left.orientation, ql);
+    const tf2::Matrix3x3 R(qr), L(ql);
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_NEAR(L.getColumn(0)[i], R.getColumn(0)[i], 1e-9);   // fingers: same direction
+        EXPECT_NEAR(L.getColumn(1)[i], -R.getColumn(1)[i], 1e-9);  // left closes toward its -y
+    }
+}
+
+TEST(ObjectGrasp, BackOffRetreatsAgainstTheFingers)
+{
+    geometry_msgs::msg::Pose grasp = objectAt(0.3, 0.0, 0.1);
+    tf2::Quaternion          down;
+    down.setRPY(0.0, M_PI_2, 0.0);  // fingers (x) pointing at the floor
+    grasp.orientation = tf2::toMsg(down);
+    const auto pre    = g1_manipulation::backOff(grasp, 0.12);
+    EXPECT_NEAR(pre.position.x, 0.3, 1e-9);
+    EXPECT_NEAR(pre.position.z, 0.22, 1e-9);  // straight up: the approach comes down
+}

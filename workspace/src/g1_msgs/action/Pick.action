@@ -6,9 +6,11 @@
 
 # Must match a class_id published on /objects.
 string object_id
-# "left" or "right". Selects the arm group, its hand group and the palm to attach to.
+# "left" or "right". Selects the arm group, its hand group and the palm to attach to. "auto"
+# takes the hand on the side the grasp point is on (pelvis frame).
 string ARM_LEFT=left
 string ARM_RIGHT=right
+string ARM_AUTO=auto
 string arm
 ---
 bool success

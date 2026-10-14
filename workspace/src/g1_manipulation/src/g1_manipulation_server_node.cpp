@@ -1,6 +1,8 @@
 #include "g1_manipulation/g1_manipulation_server_node.hpp"
 
 #include <moveit/robot_state/attached_body.h>
+#include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Vector3.h>
@@ -49,6 +51,60 @@ bool resolveArm(const std::string& arm, ArmContext& out)
     return true;
 }
 
+geometry_msgs::msg::Pose handGoalFromGrasp(const geometry_msgs::msg::Pose& grasp, bool is_left)
+{
+    if (!is_left)
+    {
+        return grasp;
+    }
+    tf2::Transform T;
+    tf2::fromMsg(grasp, T);
+    tf2::Quaternion flip;
+    flip.setRPY(M_PI, 0.0, 0.0);
+    T.setRotation(T.getRotation() * flip);
+    geometry_msgs::msg::Pose out;
+    tf2::toMsg(T, out);
+    return out;
+}
+
+geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double distance)
+{
+    tf2::Transform T;
+    tf2::fromMsg(pose, T);
+    const tf2::Vector3 x = tf2::Matrix3x3(T.getRotation()).getColumn(0);
+    geometry_msgs::msg::Pose out = pose;
+    out.position.x -= distance * x.x();
+    out.position.y -= distance * x.y();
+    out.position.z -= distance * x.z();
+    return out;
+}
+
+std::optional<geometry_msgs::msg::Pose> findHypothesis(
+    const vision_msgs::msg::Detection3D& detection, const std::string& class_id)
+{
+    for (const auto& r : detection.results)
+    {
+        if (r.hypothesis.class_id == class_id)
+        {
+            return r.pose.pose;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::pair<std::string, geometry_msgs::msg::Pose>> findHypothesisPrefix(
+    const vision_msgs::msg::Detection3D& detection, const std::string& prefix)
+{
+    for (const auto& r : detection.results)
+    {
+        if (r.hypothesis.class_id.rfind(prefix, 0) == 0)
+        {
+            return std::make_pair(r.hypothesis.class_id, r.pose.pose);
+        }
+    }
+    return std::nullopt;
+}
+
 G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
   : rclcpp::Node("g1_manipulation_server", options)
 {
@@ -73,6 +129,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // The fingers close toward the palm's +y, so it is the ROLL that turns the closing axis
     // downward for a grasp off a table, and the pitch that would be wrong.
     grasp_rpy_ = declare_parameter<std::vector<double>>("grasp_rpy", { -M_PI_2, 0.0, 0.0 });
+    // For objects that publish their own grasp ("<object>/grasp/<name>" on /objects): the hand
+    // goes to a point this far back along the grasp's approach axis, then straight in.
+    grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.12);
+    linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -461,6 +521,47 @@ bool G1ManipulationServer::moveToNamed(MoveGroup& group, const std::string& name
     return group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
 }
 
+bool G1ManipulationServer::moveLinear(
+    MoveGroup& group, const geometry_msgs::msg::Pose& pose, const std::string& link,
+    const std::string& what)
+{
+    group.setStartStateToCurrentState();
+    // computeCartesianPath moves the group's end-effector link; the goal is for the grasp
+    // frame, so it stands in as the end effector for this one call.
+    const std::string previous = group.getEndEffectorLink();
+    group.setEndEffectorLink(link);
+    moveit_msgs::msg::RobotTrajectory trajectory;
+    const double fraction = group.computeCartesianPath({ pose }, 0.005, 0.0, trajectory, true);
+    group.setEndEffectorLink(previous);
+    if (fraction < linear_min_fraction_)
+    {
+        RCLCPP_ERROR(
+            get_logger(),
+            "%s: only %.0f%% of the straight line is reachable without collision",
+            what.c_str(),
+            100.0 * fraction);
+        return false;
+    }
+    // A Cartesian path comes back with timing for full speed; slow it to the skills' scaling,
+    // the same reason every other move here is scaled.
+    robot_trajectory::RobotTrajectory timed(group.getRobotModel(), group.getName());
+    timed.setRobotTrajectoryMsg(*group.getCurrentState(), trajectory);
+    trajectory_processing::TimeOptimalTrajectoryGeneration totg;
+    if (!totg.computeTimeStamps(timed, velocity_scaling_, velocity_scaling_))
+    {
+        RCLCPP_ERROR(get_logger(), "%s: could not time the straight-line path", what.c_str());
+        return false;
+    }
+    timed.getRobotTrajectoryMsg(trajectory);
+    const auto executed = group.execute(trajectory);
+    if (executed != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(get_logger(), "%s: execution failed (%d)", what.c_str(), executed.val);
+        return false;
+    }
+    return true;
+}
+
 G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::string& name)
 {
     const auto it = groups_.find(name);
@@ -473,16 +574,70 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     auto       result   = std::make_shared<Pick::Result>();
     auto       feedback = std::make_shared<Pick::Feedback>();
 
-    ArmContext arm;
-    if (!resolveArm(goal->arm, arm))
+    if (goal->arm != "left" && goal->arm != "right" && goal->arm != "auto")
     {
         result->success = false;
-        result->message = "arm must be 'left' or 'right', got '" + goal->arm + "'";
+        result->message = "arm must be 'left', 'right' or 'auto', got '" + goal->arm + "'";
         goal_handle->abort(result);
         return;
     }
+    // Located before the arm is chosen: with arm "auto" the grasp point decides it. Nothing has
+    // moved yet, so a failure here needs no clean-up.
+    const auto abort_locating = [&](const std::string& why) {
+        result->success = false;
+        result->message = std::string(Pick::Feedback::PHASE_LOCATING) + ": " + why;
+        goal_handle->abort(result);
+    };
+
+    feedback->phase = Pick::Feedback::PHASE_LOCATING;
+    goal_handle->publish_feedback(feedback);
+    const auto detection = lookUpObject(goal->object_id);
+    if (!detection)
+    {
+        abort_locating("no fresh pose for '" + goal->object_id + "'");
+        return;
+    }
+    // /objects is in odom and the planner works in pelvis; the two differ by wherever the
+    // robot is standing, so every measured pose goes through TF before it is planned against.
+    const std::string object_frame =
+        detection->header.frame_id.empty() ? objects_.header.frame_id : detection->header.frame_id;
+    const auto object_pose = toPlanningFrame(detection->results.front().pose.pose, object_frame);
+    if (!object_pose)
+    {
+        abort_locating("could not transform the object pose");
+        return;
+    }
+    // An object that publishes its own grasp ("<object>/grasp/<name>", from g1_perception's
+    // tracker) is taken there, straight in along the grasp's approach axis. Anything else gets
+    // the top grasp graspFrameGoal() builds from its bounding box.
+    std::optional<geometry_msgs::msg::Pose> grasp_pose;
+    std::string                             grasp_name;
+    if (const auto g = findHypothesisPrefix(*detection, goal->object_id + "/grasp/"))
+    {
+        grasp_name = g->first;
+        grasp_pose = toPlanningFrame(g->second, object_frame);
+        if (!grasp_pose)
+        {
+            abort_locating("could not transform the grasp pose");
+            return;
+        }
+    }
+
+    // "auto": the hand on the side the grasp point is on. The planning frame is the pelvis,
+    // +y to the robot's left.
+    std::string arm_name = goal->arm;
+    if (arm_name == "auto")
+    {
+        const double y = grasp_pose ? grasp_pose->position.y : object_pose->position.y;
+        arm_name       = y >= 0.0 ? "left" : "right";
+    }
+    ArmContext arm;
+    resolveArm(arm_name, arm);
     MoveGroup* arm_group  = groupFor(arm.arm_group);
     MoveGroup* hand_group = groupFor(arm.hand_group);
+    const std::string how = grasp_pose ? "at " + grasp_name : std::string("from above (bounding box)");
+    RCLCPP_INFO(get_logger(), "pick %s with the %s hand, %s", goal->object_id.c_str(), arm_name.c_str(),
+                how.c_str());
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
@@ -496,31 +651,21 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         goal_handle->abort(result);
     };
 
-    feedback->phase = Pick::Feedback::PHASE_LOCATING;
-    goal_handle->publish_feedback(feedback);
-    const auto detection = lookUpObject(goal->object_id);
-    if (!detection)
-    {
-        fail(Pick::Feedback::PHASE_LOCATING, "no fresh pose for '" + goal->object_id + "'");
-        return;
-    }
-    // /objects is in odom and the planner works in pelvis; the two differ by wherever the
-    // robot is standing, so every measured pose goes through TF before it is planned against.
-    const std::string object_frame =
-        detection->header.frame_id.empty() ? objects_.header.frame_id : detection->header.frame_id;
-    const auto object_pose = toPlanningFrame(detection->results.front().pose.pose, object_frame);
-    if (!object_pose)
-    {
-        fail(Pick::Feedback::PHASE_LOCATING, "could not transform the object pose");
-        return;
-    }
     const moveit_msgs::msg::CollisionObject object =
         publishCollisionObject(*detection, *object_pose);
 
     const geometry_msgs::msg::Pose grasp_goal =
-        graspFrameGoal(*object_pose, detection->bbox.size.z, arm);
+        grasp_pose ? handGoalFromGrasp(*grasp_pose, arm.is_left)
+                   : graspFrameGoal(*object_pose, detection->bbox.size.z, arm);
     geometry_msgs::msg::Pose pregrasp_goal = grasp_goal;
-    pregrasp_goal.position.z += approach_height_m_;
+    if (grasp_pose)
+    {
+        pregrasp_goal = backOff(grasp_goal, grasp_approach_m_);
+    }
+    else
+    {
+        pregrasp_goal.position.z += approach_height_m_;
+    }
 
     feedback->phase = Pick::Feedback::PHASE_PREGRASP;
     goal_handle->publish_feedback(feedback);
@@ -561,7 +706,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     allowHandContact(arm, { "<octomap>" }, true);
     planning_scene_.removeCollisionObjects({ goal->object_id });
 
-    if (!moveTo(*arm_group, grasp_goal, arm.grasp_frame, "approach"))
+    // Straight in for a published grasp: the parts beside it are close, and a free-space plan
+    // may swing the fingers through them.
+    if (!(grasp_pose ? moveLinear(*arm_group, grasp_goal, arm.grasp_frame, "approach")
+                     : moveTo(*arm_group, grasp_goal, arm.grasp_frame, "approach")))
     {
         fail(Pick::Feedback::PHASE_APPROACH, "could not reach the grasp pose");
         return;
@@ -614,15 +762,26 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     goal_handle->publish_feedback(feedback);
     geometry_msgs::msg::Pose lifted = grasp_goal;
     lifted.position.z += lift_height_m_;
-    if (!moveTo(*arm_group, lifted, arm.grasp_frame, "lift"))
+    if (!(grasp_pose ? moveLinear(*arm_group, lifted, arm.grasp_frame, "lift")
+                     : moveTo(*arm_group, lifted, arm.grasp_frame, "lift")))
     {
         fail(Pick::Feedback::PHASE_LIFT, "could not lift clear of the surface");
         return;
     }
 
     allowHandContact(arm, { "<octomap>", goal->object_id }, false);
+    // How it is held, so a place can put the OBJECT at a pose: grasp_frame_T_object, from the
+    // grasp the hand was sent to and the object pose it was planned against.
+    {
+        tf2::Transform world_T_grasp, world_T_object;
+        tf2::fromMsg(grasp_goal, world_T_grasp);
+        tf2::fromMsg(*object_pose, world_T_object);
+        std::lock_guard<std::mutex> lock(held_mutex_);
+        held_grasp_[goal->object_id] = world_T_grasp.inverse() * world_T_object;
+        held_arm_[goal->object_id]   = arm_name;
+    }
     result->success = true;
-    result->message = "picked " + goal->object_id + " with the " + goal->arm + " hand";
+    result->message = "picked " + goal->object_id + " with the " + arm_name + " hand";
     goal_handle->succeed(result);
 }
 
@@ -631,17 +790,6 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     const auto goal     = goal_handle->get_goal();
     auto       result   = std::make_shared<Place::Result>();
     auto       feedback = std::make_shared<Place::Feedback>();
-
-    ArmContext arm;
-    if (!resolveArm(goal->arm, arm))
-    {
-        result->success = false;
-        result->message = "arm must be 'left' or 'right', got '" + goal->arm + "'";
-        goal_handle->abort(result);
-        return;
-    }
-    MoveGroup* arm_group  = groupFor(arm.arm_group);
-    MoveGroup* hand_group = groupFor(arm.hand_group);
 
     // What is held, read from the scene rather than remembered, because the attachment is the
     // authority on what the hand actually has. Needed BEFORE the exemption is applied: the
@@ -658,6 +806,34 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
             break;
         }
     }
+    // How it is held, if this server picked it at a published grasp: then the place puts the
+    // OBJECT at the target pose, and the hand goes wherever that puts it.
+    std::optional<tf2::Transform> grasp_T_object;
+    std::string                   picked_with;
+    {
+        std::lock_guard<std::mutex> lock(held_mutex_);
+        if (const auto it = held_grasp_.find(held_id); it != held_grasp_.end())
+        {
+            grasp_T_object = it->second;
+            picked_with    = held_arm_[held_id];
+        }
+    }
+
+    std::string arm_name = goal->arm;
+    if (arm_name == "auto")
+    {
+        arm_name = picked_with.empty() ? "right" : picked_with;
+    }
+    ArmContext arm;
+    if (!resolveArm(arm_name, arm))
+    {
+        result->success = false;
+        result->message = "arm must be 'left', 'right' or 'auto', got '" + goal->arm + "'";
+        goal_handle->abort(result);
+        return;
+    }
+    MoveGroup* arm_group  = groupFor(arm.arm_group);
+    MoveGroup* hand_group = groupFor(arm.hand_group);
 
     // The octomap AND the object being carried: an attached body is part of the robot for
     // kinematics but is still its own collision entity, so exempting the palm it hangs off
@@ -681,29 +857,83 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // the pick defers its exemption for; the descent below gets the full one.
     allowHandContact(arm, touchables, true, /*include_links=*/false);
 
-    // Prefer a surface read from /objects over the caller's coordinate.
+    // Where the OBJECT goes, from /objects when the goal names a detected thing.
     //
-    // A tree writes its drop point in the MAP frame, while the base approach that parked the
-    // robot drove against /objects, published in ODOM -- and those two frames are only as
-    // close as AMCL is right. A realistic map->odom drift is bigger than the arm's 0.04 m
-    // lateral window, so a target correct on the map can leave the preplace with no IK
-    // solution at all. Resolving the surface from the stream the approach used makes the two
-    // agree by construction, however far localization has drifted.
-    std::optional<geometry_msgs::msg::Pose>      target;
-    std::optional<vision_msgs::msg::Detection3D> surface;
-    if (!goal->surface_object_id.empty())
-    {
-        surface = lookUpObject(goal->surface_object_id);
-        if (!surface)
+    // Prefer that over the caller's coordinate. A tree writes its drop point in the MAP frame,
+    // while the base approach that parked the robot drove against /objects, published in ODOM --
+    // and those two frames are only as close as AMCL is right. A realistic map->odom drift is
+    // bigger than the arm's 0.04 m lateral window. Resolving the target from the stream the
+    // approach used makes the two agree by construction, however far localization has drifted.
+    //
+    // Two kinds: "<object>/slot/<name>", a pose a detection publishes for something to sit in
+    // (the object goes exactly there), or a plain object id, a surface the held object is
+    // stood on top of. Returns the target in the planning frame and in the /objects frame.
+    const std::string& name     = goal->surface_object_id;
+    const auto         slot_at  = name.find("/slot/");
+    const bool         is_slot  = slot_at != std::string::npos;
+    const std::string  owner_id = is_slot ? name.substr(0, slot_at) : name;
+    const auto resolve = [&]() -> std::optional<std::pair<geometry_msgs::msg::Pose, geometry_msgs::msg::Pose>> {
+        const auto detection = lookUpObject(owner_id);
+        if (!detection)
         {
-            fail(
-                Place::Feedback::PHASE_PREPLACE,
-                "nothing called '" + goal->surface_object_id + "' on /objects");
-            return;
+            return std::nullopt;
         }
         const std::string frame =
-            surface->header.frame_id.empty() ? objects_.header.frame_id : surface->header.frame_id;
-        target = toPlanningFrame(surface->results.front().pose.pose, frame);
+            detection->header.frame_id.empty() ? objects_.header.frame_id : detection->header.frame_id;
+        std::optional<geometry_msgs::msg::Pose> in_objects =
+            is_slot ? findHypothesis(*detection, name) : detection->results.front().pose.pose;
+        if (!in_objects)
+        {
+            RCLCPP_ERROR(get_logger(), "'%s' publishes no '%s'", owner_id.c_str(), name.c_str());
+            return std::nullopt;
+        }
+        if (!is_slot)
+        {
+            // A detected surface reports its own centre, so the held object goes on TOP of it:
+            // half the surface's height to reach its face, half the object's to stand it there.
+            in_objects->position.z += 0.5 * (detection->bbox.size.z + held_height);
+        }
+        const auto in_planning = toPlanningFrame(*in_objects, frame);
+        if (!in_planning)
+        {
+            return std::nullopt;
+        }
+        return std::make_pair(*in_planning, *in_objects);
+    };
+
+    // The grasp frame's goal for an object target, and the point the straight descent starts.
+    const auto hand_goals = [&](const geometry_msgs::msg::Pose& target) {
+        geometry_msgs::msg::Pose place_goal, preplace;
+        if (grasp_T_object)
+        {
+            // world_T_grasp = world_T_object * object_T_grasp: the object exactly at the target,
+            // held as it was picked. The approach is the grasp's own, in reverse for the retreat.
+            tf2::Transform world_T_object;
+            tf2::fromMsg(target, world_T_object);
+            tf2::toMsg(world_T_object * grasp_T_object->inverse(), place_goal);
+            preplace = backOff(place_goal, grasp_approach_m_);
+        }
+        else
+        {
+            place_goal = graspFrameGoal(target, held_height, arm);
+            preplace   = place_goal;
+            preplace.position.z += approach_height_m_;
+        }
+        return std::make_pair(place_goal, preplace);
+    };
+
+    std::optional<geometry_msgs::msg::Pose> target;
+    std::optional<geometry_msgs::msg::Point> expected;  // in the /objects frame
+    if (!name.empty())
+    {
+        const auto resolved = resolve();
+        if (!resolved)
+        {
+            fail(Place::Feedback::PHASE_PREPLACE, "nothing usable called '" + name + "' on /objects");
+            return;
+        }
+        target   = resolved->first;
+        expected = resolved->second.position;
     }
     else
     {
@@ -717,18 +947,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         fail(Place::Feedback::PHASE_PREPLACE, "could not transform the target pose");
         return;
     }
-
-    // A detected surface reports its own centre, so the held object goes on TOP of it: half the
-    // surface's height to reach its face, half the object's to stand it there. A caller-supplied
-    // pose is where the object itself goes and needs neither.
-    if (surface)
-    {
-        target->position.z += 0.5 * (surface->bbox.size.z + held_height);
-    }
-
-    geometry_msgs::msg::Pose place_goal = graspFrameGoal(*target, held_height, arm);
-    geometry_msgs::msg::Pose preplace   = place_goal;
-    preplace.position.z += approach_height_m_;
+    auto [place_goal, preplace] = hand_goals(*target);
 
     feedback->phase = Place::Feedback::PHASE_PREPLACE;
     goal_handle->publish_feedback(feedback);
@@ -741,40 +960,23 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // Re-resolve before descending. Everything above was computed in the pelvis frame before the
     // arm reached out, and the reach moves the base: extending a loaded arm shifts the COM and
     // the balancing gait steps to keep up, measured at 0.165 m.
-    //
-    // `expected` is the same target in the /objects frame, for the accuracy check at the end.
-    // That check runs after a reach, a release and a retreat, so in the pelvis frame the base's
-    // own travel reads as placement error.
-    std::optional<geometry_msgs::msg::Point> expected;
-    if (surface)
+    if (!name.empty())
     {
-        if (const auto fresh = lookUpObject(goal->surface_object_id))
+        if (const auto fresh = resolve())
         {
-            const std::string frame =
-                fresh->header.frame_id.empty() ? objects_.header.frame_id : fresh->header.frame_id;
-            expected = fresh->results.front().pose.pose.position;
-            expected->z += 0.5 * (fresh->bbox.size.z + held_height);
-            if (auto moved = toPlanningFrame(fresh->results.front().pose.pose, frame))
+            const auto [regoal, repre] = hand_goals(fresh->first);
+            const double shift = std::hypot(regoal.position.x - place_goal.position.x,
+                                            regoal.position.y - place_goal.position.y);
+            if (shift > 0.01)
             {
-                moved->position.z += 0.5 * (fresh->bbox.size.z + held_height);
-                target               = moved;
-                const auto   regrasp = graspFrameGoal(*moved, held_height, arm);
-                const double shift   = std::hypot(
-                    regrasp.position.x - place_goal.position.x,
-                    regrasp.position.y - place_goal.position.y);
-                if (shift > 0.01)
-                {
-                    RCLCPP_INFO(
-                        get_logger(),
-                        "the base moved %.3f m during the reach; re-aiming",
-                        shift);
-                }
-                place_goal = regrasp;
-                // The retreat returns here, so it moves with the re-aim. Left stale, the lift is
-                // diagonal by however far the base walked.
-                preplace = place_goal;
-                preplace.position.z += approach_height_m_;
+                RCLCPP_INFO(get_logger(), "the base moved %.3f m during the reach; re-aiming", shift);
             }
+            target     = fresh->first;
+            expected   = fresh->second.position;
+            place_goal = regoal;
+            // The retreat returns here, so it moves with the re-aim. Left stale, the lift is
+            // diagonal by however far the base walked.
+            preplace = repre;
         }
     }
 
@@ -782,7 +984,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     goal_handle->publish_feedback(feedback);
     // Now the hand may touch the surface: the descent ends in contact by definition.
     allowHandContact(arm, touchables, true);
-    if (!moveTo(*arm_group, place_goal, arm.grasp_frame, "lower"))
+    if (!(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower")
+                         : moveTo(*arm_group, place_goal, arm.grasp_frame, "lower")))
     {
         fail(Place::Feedback::PHASE_LOWER, "could not lower onto the target");
         return;
@@ -807,6 +1010,11 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     {
         arm_group->detachObject(body->getName());
     }
+    {
+        std::lock_guard<std::mutex> lock(held_mutex_);
+        held_grasp_.erase(held_id);
+        held_arm_.erase(held_id);
+    }
 
     feedback->phase = Place::Feedback::PHASE_RETREAT;
     goal_handle->publish_feedback(feedback);
@@ -817,7 +1025,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     {
         allowHandContact(arm, { held_id }, false);
     }
-    if (!moveTo(*arm_group, preplace, arm.grasp_frame, "retreat"))
+    if (!(grasp_T_object ? moveLinear(*arm_group, preplace, arm.grasp_frame, "retreat")
+                         : moveTo(*arm_group, preplace, arm.grasp_frame, "retreat")))
     {
         fail(Place::Feedback::PHASE_RETREAT, "could not retreat clear of the object");
         return;
@@ -828,15 +1037,14 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // Did it actually land there? A successful plan says nothing about where the object ended
     // up: one release short dropped the cube on the floor with every leaf reporting success.
     //
-    // Against `expected` when a surface gave one, so both sides come from /objects and the
-    // walking base cancels. A caller-supplied pose falls back to the planning frame.
+    // Against `expected` when /objects gave the target, so both sides come from /objects and
+    // the walking base cancels. A caller-supplied pose falls back to the planning frame.
     if (!held_id.empty())
     {
         if (const auto landed = lookUpObject(held_id))
         {
-            const geometry_msgs::msg::Pose& pose = landed->results.front().pose.pose;
-            // Binds without a temporary; `target` was already checked engaged above.
-            const geometry_msgs::msg::Point& aim = expected ? *expected : target->position;
+            const geometry_msgs::msg::Pose&  pose = landed->results.front().pose.pose;
+            const geometry_msgs::msg::Point& aim  = expected ? *expected : target->position;
 
             std::optional<geometry_msgs::msg::Point> where = pose.position;
             if (!expected)
@@ -870,7 +1078,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     }
 
     result->success = true;
-    result->message = "placed with the " + goal->arm + " hand";
+    result->message = "placed with the " + arm_name + " hand";
     goal_handle->succeed(result);
 }
 

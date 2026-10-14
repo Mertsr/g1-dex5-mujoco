@@ -221,6 +221,23 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
             throw std::runtime_error(name + ".output_offset: " + error);
         }
         c.model_T_output = *o;
+        // "name x y z roll pitch yaw": the parser's frame slot carries the name.
+        const auto named = [&](const std::string& key) {
+            std::vector<FramedPose> out_poses;
+            for (const auto& spec :
+                 declare_parameter<std::vector<std::string>>(name + "." + key, std::vector<std::string>{}))
+            {
+                const auto p = parseFramedPose(spec, error);
+                if (!p)
+                {
+                    throw std::runtime_error(name + "." + key + ": " + error);
+                }
+                out_poses.push_back(*p);
+            }
+            return out_poses;
+        };
+        grasps_.push_back(named("grasps"));
+        slots_.push_back(named("slots"));
         if (c.priors.empty() && !c.params.global_fallback)
         {
             throw std::runtime_error("object '" + name + "' has neither priors nor global_fallback: it can never be found");
@@ -346,8 +363,9 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
     vision_msgs::msg::Detection3DArray array;
     array.header.stamp    = msg->header.stamp;
     array.header.frame_id = output_frame_;
-    for (const auto& r : results)
+    for (std::size_t oi = 0; oi < results.size(); ++oi)
     {
+        const auto& r = results[oi];
         if (r.just_locked)
         {
             RCLCPP_INFO(get_logger(), "%s: locked (ratio %.2f, coverage %.2f, violation %.2f)", r.name.c_str(),
@@ -383,6 +401,29 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         h.hypothesis.score    = r.out.score.coverage;
         h.pose.pose           = toPose(pose);
         d.results.push_back(h);
+        // Grasps and slots ride on the same detection, after the object's own pose, so a consumer
+        // that reads results[0] sees nothing new.
+        for (const auto& [kind, list] : { std::pair<const char*, const std::vector<FramedPose>*>{ "grasp", &grasps_[oi] },
+                                          std::pair<const char*, const std::vector<FramedPose>*>{ "slot", &slots_[oi] } })
+        {
+            for (const auto& g : *list)
+            {
+                vision_msgs::msg::ObjectHypothesisWithPose extra;
+                extra.hypothesis.class_id = r.name + "/" + kind + "/" + g.frame;
+                extra.hypothesis.score    = r.out.score.coverage;
+                extra.pose.pose           = toPose(pose * g.pose);
+                d.results.push_back(extra);
+                if (tf_broadcaster_)
+                {
+                    geometry_msgs::msg::TransformStamped t;
+                    t.header.stamp    = msg->header.stamp;
+                    t.header.frame_id = world_frame_;
+                    t.child_frame_id  = "tracked/" + extra.hypothesis.class_id;
+                    t.transform       = toTransform(r.world_T_output * g.pose);
+                    tf_broadcaster_->sendTransform(t);
+                }
+            }
+        }
         Eigen::Isometry3f centre = pose;
         centre.translation()     = pose * r.box_centre;
         d.bbox.center            = toPose(centre);
@@ -526,11 +567,86 @@ void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const D
                 label.scale.z = 0.04;
                 label.color   = colour(i, 1.0f);
                 char text[160];
-                std::snprintf(text, sizeof text, "%s %s\nratio %.2f cov %.2f viol %.2f", r.name.c_str(),
+                std::snprintf(text, sizeof text, "%s %s  ratio %.2f cov %.2f viol %.2f", r.name.c_str(),
                               r.valid ? "TRACK" : "REJECT", r.out.score.ratio, r.out.score.coverage,
                               r.out.score.violation);
                 label.text = text;
                 arr.markers.push_back(label);
+
+                // Each grasp as a gripper: the approach line (yellow) coming in along the grasp
+                // frame's x, the fingers (red, the side they close toward) and the thumb (blue),
+                // the palm bar (white), and a cyan cross where the hand closes.
+                const Eigen::Isometry3f world_T_output = world_T_model * multi_->config(i).model_T_output;
+                for (const auto& g : grasps_[i])
+                {
+                    const Eigen::Isometry3f T = world_T_output * g.pose;
+                    auto lines                = base;
+                    lines.id                  = id++;
+                    lines.type                = visualization_msgs::msg::Marker::LINE_LIST;
+                    lines.pose.orientation.w  = 1.0;
+                    lines.scale.x             = 0.003;
+                    const auto add = [&](const Eigen::Vector3f& a, const Eigen::Vector3f& b, float r_, float g_,
+                                         float b_) {
+                        for (const auto& p : { a, b })
+                        {
+                            const Eigen::Vector3f w = T * p;
+                            geometry_msgs::msg::Point q;
+                            q.x = w.x(), q.y = w.y(), q.z = w.z();
+                            lines.points.push_back(q);
+                            std_msgs::msg::ColorRGBA c;
+                            c.r = r_, c.g = g_, c.b = b_, c.a = 1.0f;
+                            lines.colors.push_back(c);
+                        }
+                    };
+                    const float f = 0.035f;  // finger half-spacing
+                    add(Eigen::Vector3f(-0.16f, 0.0f, 0.0f), Eigen::Vector3f(-0.05f, 0.0f, 0.0f), 1.0f, 0.85f, 0.1f);          // approach
+                    add(Eigen::Vector3f(-0.05f, -f, 0.0f), Eigen::Vector3f(-0.05f, f, 0.0f), 0.9f, 0.9f, 0.9f);         // palm
+                    add(Eigen::Vector3f(-0.05f, f, 0.0f), Eigen::Vector3f(0.015f, f, 0.0f), 1.0f, 0.15f, 0.15f);        // fingers
+                    add(Eigen::Vector3f(-0.05f, -f, 0.0f), Eigen::Vector3f(0.015f, -f, 0.0f), 0.2f, 0.4f, 1.0f);        // thumb
+                    add(Eigen::Vector3f(-0.012f, 0.0f, 0.0f), Eigen::Vector3f(0.012f, 0.0f, 0.0f), 0.0f, 0.9f, 0.9f);         // cross
+                    add(Eigen::Vector3f(0.0f, -0.012f, 0.0f), Eigen::Vector3f(0.0f, 0.012f, 0.0f), 0.0f, 0.9f, 0.9f);
+                    add(Eigen::Vector3f(0.0f, 0.0f, -0.012f), Eigen::Vector3f(0.0f, 0.0f, 0.012f), 0.0f, 0.9f, 0.9f);
+                    arr.markers.push_back(lines);
+
+                    auto name    = label;
+                    name.id      = id++;
+                    name.pose    = toPose(T);
+                    name.pose.position.z += 0.03;
+                    name.scale.z = 0.025;
+                    name.text    = g.frame;
+                    arr.markers.push_back(name);
+                }
+                // Each slot as axes (red x, green y, blue z) and its name.
+                for (const auto& sl : slots_[i])
+                {
+                    const Eigen::Isometry3f T = world_T_output * sl.pose;
+                    auto axes                 = base;
+                    axes.id                   = id++;
+                    axes.type                 = visualization_msgs::msg::Marker::LINE_LIST;
+                    axes.pose.orientation.w   = 1.0;
+                    axes.scale.x              = 0.003;
+                    for (int a = 0; a < 3; ++a)
+                    {
+                        for (const auto& p : { Eigen::Vector3f::Zero().eval(), (0.05f * Eigen::Vector3f::Unit(a)).eval() })
+                        {
+                            const Eigen::Vector3f w = T * p;
+                            geometry_msgs::msg::Point q;
+                            q.x = w.x(), q.y = w.y(), q.z = w.z();
+                            axes.points.push_back(q);
+                            std_msgs::msg::ColorRGBA c;
+                            c.r = a == 0, c.g = a == 1, c.b = a == 2, c.a = 1.0f;
+                            axes.colors.push_back(c);
+                        }
+                    }
+                    arr.markers.push_back(axes);
+                    auto name    = label;
+                    name.id      = id++;
+                    name.pose    = toPose(T);
+                    name.pose.position.z += 0.06;
+                    name.scale.z = 0.025;
+                    name.text    = sl.frame;
+                    arr.markers.push_back(name);
+                }
             }
             if (!r.hypotheses.empty())
             {

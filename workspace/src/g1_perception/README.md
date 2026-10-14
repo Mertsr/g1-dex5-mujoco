@@ -102,6 +102,26 @@ MUJOCO_GL=egl python3 tools/make_icp_dataset.py <scene.xml> /tmp/icpdata   # nee
 icp_bench /tmp/icpdata/sway_index pallet=models/bsh_pallet.stl panel=models/bsh_panel.stl
 ```
 
+## Grasps and slots
+
+Per object, in its output frame (`config/object_tracker_conveyor.yaml`):
+
+- `grasps: ["<name> x y z roll pitch yaw"]`: where a hand takes the part.
+- `slots: ["<name> x y z roll pitch yaw"]`: where another part sits on this one, such as the
+  pallet's nests.
+
+The tracker publishes each one, carried by the tracked pose, in three ways:
+
+- as an extra hypothesis on the detection: `panel/grasp/edge_high`, `pallet/slot/nest_2`;
+- as a TF frame: `tracked/panel/grasp/edge_high`;
+- in RViz (`~/debug/markers`):
+  - a grasp is drawn as a gripper: approach line yellow, fingers red, thumb side blue, palm white,
+    a cyan cross where the hand closes;
+  - a slot is drawn as axes.
+
+`g1_manipulation`'s Pick and Place use them; see its README. The panel's `edge_high` grasp is a
+first guess from the CAD. Check it against the hand in the simulator before relying on it.
+
 ## Configuration
 
 See `config/object_tracker_conveyor.yaml`. Poses are one string each:
