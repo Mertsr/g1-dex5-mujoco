@@ -154,6 +154,7 @@ struct GlobalParams
     float max_corr        = 0.015f;
     float inlier_fraction = 0.2f;
     int   attempts        = 3;  ///< RANSAC runs per search; every answer is verified
+    int   threads         = 2;  ///< normal and feature estimation threads
 };
 
 /// FPFH + RANSAC. Returns a coarse cam_T_model, or nothing when no consensus was found.
@@ -186,6 +187,9 @@ struct TrackerParams
     float free_space_tol  = 0.015f;
     int   lost_after      = 5;      ///< consecutive bad frames before searching again
     int   search_stride   = 2;      ///< pixel stride for the global-search cloud
+    /// Searches restart at most this often. A search over a swept prior is ~60 ICP fits, and
+    /// restarting it back to back while a part is out of view would keep a core busy for nothing.
+    double search_interval_s = 0.2;
     float explained_dist  = 0.004f; ///< see Explained
     /// Every prior is also tried shifted by each of these (model frame): a pallet whose index
     /// position is unknown is found by trying the prior along its travel.
@@ -234,6 +238,11 @@ struct FrameContext
     /// sits at, the pallet's nests for a panel, the hand for a carried one. Searching tries these
     /// first; only if none verifies does it fall back to FPFH over the whole frame.
     std::vector<Eigen::Isometry3f> priors;
+    /// Tracking only: further starting poses tried, in order, when the fit from `predicted`
+    /// fails -- the world pose without velocity, say. After them the tracker tries the last pose
+    /// it confirmed IN THE CAMERA FRAME, which survives TF (odometry) that jumps or lags, and
+    /// finally a wide-gate refit. Each costs one fit, only on a frame the first one failed.
+    std::vector<Eigen::Isometry3f> fallbacks;
 };
 
 class ObjectTracker
@@ -250,6 +259,9 @@ public:
         IcpResult         icp;
         int               scene_points = 0;
         double            ms = 0.0;  ///< wall time spent in update()
+        /// Tracking: which start won. 0 = the prediction, 1.. = fallbacks, then the last
+        /// camera-frame pose, then the wide refit; -1 = none (this frame rejected).
+        int               start_used = -1;
     };
 
     ObjectTracker(std::string name, std::shared_ptr<const ObjectModel> model, TrackerParams params);
@@ -282,9 +294,11 @@ private:
     TrackerParams                      params_;
     State                              state_ = State::kSearching;
     Eigen::Isometry3f                  last_  = Eigen::Isometry3f::Identity();
+    Eigen::Isometry3f                  last_confirmed_ = Eigen::Isometry3f::Identity();  ///< camera frame
     int                                bad_frames_ = 0;
     Search                             prior_search_, global_search_;
     double                             prior_stamp_ = 0.0, global_stamp_ = 0.0;
+    double                             last_prior_search_ = -1e9;
     std::optional<double>              searching_since_;
     unsigned                           searches_ = 0;
 };

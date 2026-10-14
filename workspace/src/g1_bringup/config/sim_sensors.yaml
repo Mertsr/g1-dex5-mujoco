@@ -34,9 +34,11 @@ camera_enabled: true
 # between frames. The log line "[grove_g1] camera: X ms/frame (budget Y)" shows whether the
 # machine keeps up; if X approaches Y, turn colour off or lower the rate.
 camera_rate_hz: 30.0
-# Colour with every depth frame. false sends depth only: 1.6 MB a frame instead of 2.9 MB,
-# and only the depth is used for tracking.
-camera_rgb: true
+# Colour with every depth frame. Off: depth alone is 1.6 MB a frame against 2.9 MB with colour,
+# and at 30 Hz colour would push ~90 MB/s through the relay and DDS on the same machine as the
+# controllers. The tracker uses depth only. Turn it on for an RViz camera view or a colour
+# consumer (and lower camera_rate_hz if service calls start timing out).
+camera_rgb: false
 
 # Ground-truth poses for the manipulable objects, sampled on the same cycle as the sweep and
 # sent ahead of it. SIMULATION ONLY: this is the stand-in for a perception pipeline, and

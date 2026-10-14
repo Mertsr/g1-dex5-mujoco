@@ -320,7 +320,20 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         }
         if (r.just_lost)
         {
-            RCLCPP_WARN(get_logger(), "%s: lost, searching again", r.name.c_str());
+            // The last rejected fit's numbers say why: low ratio/coverage with no violation is
+            // occlusion or the part leaving view; violation means the fit landed off the part.
+            RCLCPP_WARN(get_logger(),
+                        "%s: lost, searching again (last fit: ratio %.2f, coverage %.2f, violation %.2f, %d points)",
+                        r.name.c_str(), r.out.score.ratio, r.out.score.coverage, r.out.score.violation,
+                        r.out.scene_points);
+        }
+        if (r.valid && r.out.start_used > 0)
+        {
+            ++fallback_starts_[r.name];
+        }
+        if (r.valid)
+        {
+            ++valid_frames_[r.name];
         }
         if (!r.valid)
         {
@@ -409,6 +422,18 @@ void ObjectTrackerNode::publishStatus(const std_msgs::msg::Header& header,
         s.values.push_back(kv("points", std::to_string(r.out.scene_points)));
         s.values.push_back(kv("icp_iterations", std::to_string(r.out.icp.iterations)));
         s.values.push_back(kv("ms", std::to_string(r.out.ms)));
+        // Frames that needed a start other than the TF prediction. Many of them, with the part
+        // still, means TF (odometry, joint states, stamps) disagrees with what the camera sees.
+        s.values.push_back(kv("fallback_starts", std::to_string(fallback_starts_[r.name]) + "/" +
+                                                     std::to_string(valid_frames_[r.name])));
+        if (valid_frames_[r.name] >= 30 && fallback_starts_[r.name] * 5 > valid_frames_[r.name])
+        {
+            RCLCPP_WARN(get_logger(),
+                        "%s: %d of the last %d tracked frames could not be predicted from TF; check that TF "
+                        "(odom and the waist/head joints) is current at the depth image's stamp",
+                        r.name.c_str(), fallback_starts_[r.name], valid_frames_[r.name]);
+        }
+        fallback_starts_[r.name] = valid_frames_[r.name] = 0;
         diag.status.push_back(s);
     }
     status_pub_->publish(diag);

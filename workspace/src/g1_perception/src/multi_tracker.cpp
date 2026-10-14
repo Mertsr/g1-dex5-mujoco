@@ -95,6 +95,10 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
         {
             ctx.predicted = cam_T_world * *p;
         }
+        if (o.world_T_model)
+        {
+            ctx.fallbacks.push_back(cam_T_world * *o.world_T_model);  // as last seen, no velocity
+        }
         ctx.motion = [&](double then) -> std::optional<Eigen::Isometry3f> {
             if (!lookup)
             {

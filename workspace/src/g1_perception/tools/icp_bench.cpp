@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -151,6 +152,34 @@ int main(int argc, char** argv)
     std::printf("models prepared in %.0f ms\n",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
 
+    // Robustness knobs, all off by default. They make the bench's TF worse than the truth the
+    // way a robot's is: TF_ERR_MM / TF_ERR_MRAD add white noise to the camera pose the tracker is
+    // given (odometry jitter), TF_LAG_FRAMES hands it the camera pose from that many frames ago
+    // (TF and image stamps out of step), STAMP_JITTER_MS jitters the image stamps.
+    const auto envf = [](const char* n) { const char* v = std::getenv(n); return v ? std::atof(v) : 0.0; };
+    const double tf_err_m = envf("TF_ERR_MM") * 1e-3, tf_err_rad = envf("TF_ERR_MRAD") * 1e-3;
+    const int    tf_lag   = static_cast<int>(envf("TF_LAG_FRAMES"));
+    const double jitter_s = envf("STAMP_JITTER_MS") * 1e-3;
+    std::vector<Eigen::Isometry3f> tf_cams(cams.size());
+    std::vector<double>            stamps(frames);
+    {
+        std::mt19937                          rng(7);
+        std::normal_distribution<float>       n01(0.0f, 1.0f);
+        std::uniform_real_distribution<double> u(-1.0, 1.0);
+        for (std::size_t i = 0; i < cams.size(); ++i)
+        {
+            const Eigen::Vector3f w(n01(rng), n01(rng), n01(rng));
+            Eigen::Isometry3f     e = Eigen::Isometry3f::Identity();
+            e.linear()              = Eigen::AngleAxisf(static_cast<float>(tf_err_rad) * w.norm(), w.normalized()).toRotationMatrix();
+            e.translation()         = Eigen::Vector3f(n01(rng), n01(rng), n01(rng)) * static_cast<float>(tf_err_m);
+            tf_cams[i]              = cams[std::max<int>(0, static_cast<int>(i) - tf_lag)] * e;
+        }
+        for (int f = 0; f < frames; ++f)
+        {
+            stamps[f] = f / 30.0 + jitter_s * u(rng);
+        }
+    }
+
     // The bench's TF: the camera and any extra frame, by frame index at 30 Hz.
     const auto lookup = [&](const std::string& frame, double stamp) -> std::optional<Eigen::Isometry3f> {
         const int fi = std::max(0, std::min(frames - 1, static_cast<int>(stamp * 30.0 + 0.5)));
@@ -160,7 +189,7 @@ int main(int argc, char** argv)
         }
         if (frame == "camera")
         {
-            return cams[fi];
+            return tf_cams[fi];
         }
         const auto it = extra_frames.find(frame);
         if (it != extra_frames.end() && fi < static_cast<int>(it->second.size()))
@@ -184,7 +213,7 @@ int main(int argc, char** argv)
 
         const auto ft0     = std::chrono::steady_clock::now();
         // Ground truth is never shown to the tracker; it only grades the answer.
-        const auto results = mt.update(d, k, f / 30.0, cams[f], "camera", lookup);
+        const auto results = mt.update(d, k, stamps[f], tf_cams[f], "camera", lookup);
         const double fms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ft0).count();
         sum_frame_ms += fms, max_frame_ms = std::max(max_frame_ms, fms);

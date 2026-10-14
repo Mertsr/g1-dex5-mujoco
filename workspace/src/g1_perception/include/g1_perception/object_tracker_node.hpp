@@ -18,6 +18,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <map>
 #include <memory>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -65,6 +66,7 @@ private:
     // Frame timing over the last status period, for the log line and the diagnostics.
     double sum_ms_ = 0.0, max_ms_ = 0.0;
     int    frames_ = 0;
+    std::map<std::string, int> fallback_starts_, valid_frames_;
 };
 
 }  // namespace g1_perception

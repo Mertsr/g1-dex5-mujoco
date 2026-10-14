@@ -299,6 +299,7 @@ std::optional<Eigen::Isometry3f> globalAlign(const ObjectModel& model, const Poi
     // the surfaces a camera can actually see.
     pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne;
     pcl::PointCloud<pcl::Normal>                         normals;
+    ne.setNumberOfThreads(static_cast<unsigned>(std::max(1, params.threads)));
     ne.setInputCloud(down);
     ne.setRadiusSearch(params.normal_radius);
     ne.compute(normals);
@@ -318,6 +319,7 @@ std::optional<Eigen::Isometry3f> globalAlign(const ObjectModel& model, const Poi
     }
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr scene_f(new pcl::PointCloud<pcl::FPFHSignature33>);
     pcl::FPFHEstimationOMP<PN, PN, pcl::FPFHSignature33> fpfh;
+    fpfh.setNumberOfThreads(static_cast<unsigned>(std::max(1, params.threads)));
     fpfh.setInputCloud(scene);
     fpfh.setInputNormals(scene);
     fpfh.setRadiusSearch(params.feature_radius);
@@ -537,16 +539,35 @@ ObjectTracker::Output ObjectTracker::update(const DepthImage& depth, const Intri
     Output     out;
     if (state_ == State::kTracking)
     {
-        const Eigen::Isometry3f init = ctx.predicted ? *ctx.predicted : last_;
-        out                          = fit(*model_, params_, params_.icp_track, depth, k, init, ctx.others);
+        std::vector<Eigen::Isometry3f> starts;
+        starts.push_back(ctx.predicted ? *ctx.predicted : last_);
+        starts.insert(starts.end(), ctx.fallbacks.begin(), ctx.fallbacks.end());
+        starts.push_back(last_confirmed_);
+        for (std::size_t i = 0; i < starts.size() && !out.valid; ++i)
+        {
+            out            = fit(*model_, params_, params_.icp_track, depth, k, starts[i], ctx.others);
+            out.start_used = out.valid ? static_cast<int>(i) : -1;
+        }
+        if (!out.valid)
+        {
+            // Every start was more than the tight gate out: one wide refit before calling the
+            // frame bad.
+            Output wide = fit(*model_, params_, params_.icp, depth, k, starts.front(), ctx.others);
+            wide        = fit(*model_, params_, params_.icp_track, depth, k, wide.cam_T_model, ctx.others);
+            if (wide.valid)
+            {
+                out            = wide;
+                out.start_used = static_cast<int>(starts.size());
+            }
+        }
         if (out.valid)
         {
-            last_       = out.cam_T_model;
-            bad_frames_ = 0;
+            last_ = last_confirmed_ = out.cam_T_model;
+            bad_frames_             = 0;
         }
         else
         {
-            last_ = init;  // keep following the prediction through a short occlusion
+            last_ = starts.front();  // keep following the prediction through a short occlusion
             if (++bad_frames_ >= params_.lost_after)
             {
                 state_ = State::kSearching;
@@ -568,12 +589,15 @@ ObjectTracker::Output ObjectTracker::update(const DepthImage& depth, const Intri
         {
             state_      = State::kTracking;
             last_       = out.cam_T_model;
+            last_confirmed_ = out.cam_T_model;
             bad_frames_ = 0;
         }
         else
         {
-            if (!prior_search_.valid() && !ctx.priors.empty())
+            if (!prior_search_.valid() && !ctx.priors.empty() &&
+                ctx.stamp - last_prior_search_ >= params_.search_interval_s)
             {
+                last_prior_search_ = ctx.stamp;
                 startPriorSearch(depth, k, ctx);
             }
             if (!global_search_.valid() && params_.global_fallback &&
@@ -590,6 +614,14 @@ ObjectTracker::Output ObjectTracker::update(const DepthImage& depth, const Intri
 
 void ConstantVelocity::update(double stamp, const Eigen::Isometry3f& world_T)
 {
+    if (last_ && stamp > stamp_ && stamp - stamp_ < 0.01)
+    {
+        // Two stamps a few milliseconds apart turn pose noise into a large velocity: keep the
+        // velocity, move the anchor.
+        last_  = world_T;
+        stamp_ = stamp;
+        return;
+    }
     if (last_ && stamp > stamp_ && stamp - stamp_ <= max_gap_)
     {
         const double          dt = stamp - stamp_;
@@ -599,6 +631,16 @@ void ConstantVelocity::update(double stamp, const Eigen::Isometry3f& world_T)
         const float           a  = have_velocity_ ? static_cast<float>(alpha_) : 1.0f;
         v_                       = a * v + (1.0f - a) * v_;
         w_                       = a * w + (1.0f - a) * w_;
+        // Nothing on the line moves faster than this; a faster estimate is a bad pose or a
+        // bad stamp, and extrapolating it would throw the next fit out of its basin.
+        if (v_.norm() > 1.5f)
+        {
+            v_ *= 1.5f / v_.norm();
+        }
+        if (w_.norm() > 3.0f)
+        {
+            w_ *= 3.0f / w_.norm();
+        }
         have_velocity_           = true;
     }
     else
