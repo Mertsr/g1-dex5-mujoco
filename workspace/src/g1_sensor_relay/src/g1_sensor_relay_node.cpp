@@ -396,8 +396,11 @@ private:
 
     void publishDepth(const CloudFrame& frame)
     {
-        auto img             = std::make_unique<sensor_msgs::msg::Image>();
-        img->header.stamp    = now();
+        auto img = std::make_unique<sensor_msgs::msg::Image>();
+        // The render's own instant, through the same clock mapping as the sweep and IMU, not
+        // arrival: a pose tracker looks TF up at this stamp, and arrival is a render plus a
+        // 2.9 MB socket write later -- on a walking robot that is a visible camera-pose error.
+        img->header.stamp    = stampFor(frame.sim_time_s);
         img->header.frame_id = depth_frame_id_;
         img->height          = frame.height;
         img->width           = frame.width;

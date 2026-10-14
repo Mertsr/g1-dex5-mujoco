@@ -24,11 +24,19 @@ imu_rate_hz: 200.0
 # Also passed to g1_sensor_relay by the launch, so there is one source of truth.
 socket_path: "/tmp/g1_sensors.sock"
 
-# Depth camera. Rendered offscreen on the sensor thread against its own snapshot, then
+# Depth camera. Rendered offscreen on its OWN thread against its own snapshot, then
 # linearised to metres before it leaves the simulator. Measured 7.9 ms/frame depth-only and
 # 11.5 ms with colour, of which only ~0.04 ms holds the sim lock; the rest is the render and
 # the socket write, both off-lock.
 camera_enabled: true
+# 30 Hz like a real D435i, independent of the sweep's rate_hz above. The model-based tracker
+# (g1_perception) is built for this rate: at 10 Hz a pallet indexing at 0.15 m/s moves 15 mm
+# between frames. The log line "[grove_g1] camera: X ms/frame (budget Y)" shows whether the
+# machine keeps up; if X approaches Y, turn colour off or lower the rate.
+camera_rate_hz: 30.0
+# Colour with every depth frame. false sends depth only: 1.6 MB a frame instead of 2.9 MB,
+# and only the depth is used for tracking.
+camera_rgb: true
 
 # Ground-truth poses for the manipulable objects, sampled on the same cycle as the sweep and
 # sent ahead of it. SIMULATION ONLY: this is the stand-in for a perception pipeline, and

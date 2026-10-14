@@ -49,6 +49,13 @@ struct Config
     bool camera_enabled = false;
     int  camera_width   = 848;
     int  camera_height  = 480;
+    // The camera renders on its own thread at its own rate, not once per LiDAR sweep: a real
+    // D435i streams depth at 30 Hz, and model-based tracking of a part on the line needs that
+    // rate, while a sweep costs ~32 ms of raycasting and only has to run at 10.
+    double camera_rate_hz = 30.0;
+    // Colour rides with every depth frame unless turned off. 1.2 MB a frame of the ~2.9 MB;
+    // off is for when only depth is consumed and the relay's bandwidth matters.
+    bool camera_rgb = true;
 
     // Bodies whose ground-truth pose is published, for the sim-only object source. An
     // explicit list, never "every body with a free joint": the pelvis has one too, and so
@@ -86,6 +93,7 @@ struct State
 {
     std::thread                  thread;
     std::thread                  imu_thread;
+    std::thread                  camera_thread;
     std::unique_ptr<RelaySocket> relay;
     std::atomic<bool>            running{false};
 };
@@ -135,6 +143,12 @@ Config loadConfig()
         if (root["camera_enabled"]) {
             cfg.camera_enabled = root["camera_enabled"].as<bool>();
         }
+        if (root["camera_rate_hz"]) {
+            cfg.camera_rate_hz = root["camera_rate_hz"].as<double>();
+        }
+        if (root["camera_rgb"]) {
+            cfg.camera_rgb = root["camera_rgb"].as<bool>();
+        }
         if (root["range_max"]) {
             cfg.range_max = root["range_max"].as<double>();
         }
@@ -151,7 +165,7 @@ Config loadConfig()
             e.what());
         cfg.enabled = false;
     }
-    if (cfg.rate_hz <= 0.0 || cfg.imu_rate_hz <= 0.0 || cfg.azimuth_steps <= 0 ||
+    if (cfg.rate_hz <= 0.0 || cfg.imu_rate_hz <= 0.0 || cfg.camera_rate_hz <= 0.0 || cfg.azimuth_steps <= 0 ||
         cfg.elevation_steps <= 0) {
         std::fprintf(stderr, "[grove_g1] sensor config has non-positive values; DISABLED\n");
         cfg.enabled = false;
@@ -446,10 +460,6 @@ void sensorLoop(const Config cfg, mjModel** model, mjData** data, std::recursive
 
     double R_mount[9];
     rpyToMatrix(kMountRpy, R_mount);
-    double R_cam_mount[9];
-    rpyToMatrix(kCamRpy, R_cam_mount);
-    int cam_id = mj_name2id(m, mjOBJ_CAMERA, "d435i");
-
     std::vector<int>              object_ids;
     std::vector<ObjectPoseRecord> object_records;
     resolveObjectBodies(m, cfg.object_bodies, object_ids, object_records);
@@ -485,44 +495,6 @@ void sensorLoop(const Config cfg, mjModel** model, mjData** data, std::recursive
 
     mjData*      snapshot = mj_makeData(m);
     RelaySocket& relay    = *relay_socket;
-
-    // offscreen render state. Its own GL context on this thread: measured safe alongside the
-    // viewer's, and glfwCreateWindow off the main thread works here despite the docs.
-    mjvScene    cam_scn;
-    mjrContext  cam_con;
-    mjvOption   cam_opt;
-    mjvCamera   cam_cam;
-    GLFWwindow* cam_win = nullptr;
-    std::vector<unsigned char> cam_rgb;
-    std::vector<unsigned char> cam_payload;
-    std::vector<float>         cam_depth;
-    if (cfg.camera_enabled) {
-        if (glfwInit() && (glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE), true) &&
-            (cam_win = glfwCreateWindow(cfg.camera_width, cfg.camera_height, "g1cam", nullptr,
-                                        nullptr)) != nullptr) {
-            glfwMakeContextCurrent(cam_win);
-            mjv_defaultScene(&cam_scn);
-            mjv_makeScene(m, &cam_scn, 2000);
-            mjr_defaultContext(&cam_con);
-            mjr_makeContext(m, &cam_con, mjFONTSCALE_100);
-            mjr_setBuffer(mjFB_OFFSCREEN, &cam_con);
-            mjv_defaultOption(&cam_opt);
-            mjv_defaultCamera(&cam_cam);
-            // FIXED and bound to our camera element, not FREE. A free camera ignores
-            // cam_xpos/cam_xmat entirely and orbits its own default pose, so every pose
-            // written below would be silently discarded and the depth would be identical
-            // whatever the robot did.
-            cam_cam.type       = mjCAMERA_FIXED;
-            cam_cam.fixedcamid = mj_name2id(m, mjOBJ_CAMERA, "d435i");
-            cam_rgb.resize(static_cast<std::size_t>(cfg.camera_width) * cfg.camera_height * 3);
-            cam_depth.resize(static_cast<std::size_t>(cfg.camera_width) * cfg.camera_height);
-            std::fprintf(stderr, "[grove_g1] camera: offscreen %dx%d ready\n",
-                         cam_con.offWidth, cam_con.offHeight);
-        } else {
-            std::fprintf(stderr, "[grove_g1] camera: GL setup FAILED; disabled\n");
-            cam_win = nullptr;
-        }
-    }
 
     std::vector<float> points(static_cast<std::size_t>(n_rays) * 3);
     std::vector<int>   geomid(static_cast<std::size_t>(n_rays));
@@ -592,18 +564,6 @@ void sensorLoop(const Config cfg, mjModel** model, mjData** data, std::recursive
             // Body ids are indices into the old model's name table; a reload renumbers them.
             resolveObjectBodies(m, cfg.object_bodies, object_ids, object_records);
             std::fprintf(stderr, "[grove_g1] model reloaded; sensor snapshot rebuilt\n");
-            // cam_scn and cam_con were built against the old model: their mesh and texture
-            // ids index freed arrays, and cam_id indexes the old model's camera list, so
-            // the memcpy into snapshot->cam_xpos would run off the new (possibly smaller)
-            // one. Rebuilding both is more code than a debugging-only Reload deserves, so
-            // the camera stops and the LiDAR carries on.
-            if (cam_win != nullptr) {
-                cam_win = nullptr;
-                cam_id  = -1;
-                std::fprintf(
-                    stderr,
-                    "[grove_g1] camera DISABLED after model reload; restart the sim for it\n");
-            }
             if (torso_id < 0) {
                 std::fprintf(
                     stderr, "[grove_g1] reloaded model has no torso_link; sensors DISABLED\n");
@@ -715,168 +675,238 @@ void sensorLoop(const Config cfg, mjModel** model, mjData** data, std::recursive
             }
         }
 
-        if (cam_win != nullptr && cam_id >= 0 && !reload_pending) {
-            // Transform arrays only, never mj_copyData: the copy is what MuJoCo refuses
-            // when the live stack is in use, and refusing aborts the process (S3, test A).
-            const auto cam_t0 = std::chrono::steady_clock::now();
-            double     cam_torso_pos[3];
-            double     cam_torso_mat[9];
-            {
-                std::lock_guard<std::recursive_mutex> lock(*sim_mtx);
-                // Re-checked here, not inherited from the sweep above: that lock was
-                // released in between, and a reload landing in the gap would size these
-                // copies from the old model against the new mjData.
-                if (*model != m) {
-                    reload_pending = true;
-                }
-                const mjData* live = reload_pending ? nullptr : *data;
-                if (live != nullptr) {
-                std::memcpy(snapshot->xpos, live->xpos, sizeof(mjtNum) * 3 * m->nbody);
-                std::memcpy(snapshot->xquat, live->xquat, sizeof(mjtNum) * 4 * m->nbody);
-                std::memcpy(snapshot->xmat, live->xmat, sizeof(mjtNum) * 9 * m->nbody);
-                if (m->nsite) {
-                    std::memcpy(
-                        snapshot->site_xpos, live->site_xpos, sizeof(mjtNum) * 3 * m->nsite);
-                    std::memcpy(
-                        snapshot->site_xmat, live->site_xmat, sizeof(mjtNum) * 9 * m->nsite);
-                }
-                if (m->nlight) {
-                    std::memcpy(
-                        snapshot->light_xpos, live->light_xpos, sizeof(mjtNum) * 3 * m->nlight);
-                    std::memcpy(
-                        snapshot->light_xdir, live->light_xdir, sizeof(mjtNum) * 3 * m->nlight);
-                }
-                std::memcpy(cam_torso_pos, live->xpos + 3 * torso_id, sizeof(cam_torso_pos));
-                std::memcpy(cam_torso_mat, live->xmat + 9 * torso_id, sizeof(cam_torso_mat));
-                }
-            }
-            const auto cam_t1 = std::chrono::steady_clock::now();
-
-            const double cam_row0 = cam_torso_mat[0] * cam_torso_mat[0] +
-                                    cam_torso_mat[1] * cam_torso_mat[1] +
-                                    cam_torso_mat[2] * cam_torso_mat[2];
-            if (std::isfinite(cam_row0) && cam_row0 >= 0.5) {
-                // Our own snapshot, so writing the camera pose straight into it is safe and
-                // avoids needing a mocap body or a camera on the vendored robot.
-                double cam_pos[3];
-                for (int r = 0; r < 3; ++r) {
-                    cam_pos[r] = cam_torso_pos[r] +
-                                 cam_torso_mat[3 * r + 0] * kCamXyz[0] +
-                                 cam_torso_mat[3 * r + 1] * kCamXyz[1] +
-                                 cam_torso_mat[3 * r + 2] * kCamXyz[2];
-                }
-                double R_body[9];
-                for (int r = 0; r < 3; ++r) {
-                    for (int c = 0; c < 3; ++c) {
-                        double acc = 0.0;
-                        for (int k = 0; k < 3; ++k) {
-                            acc += cam_torso_mat[3 * r + k] * R_cam_mount[3 * k + c];
-                        }
-                        R_body[3 * r + c] = acc;
-                    }
-                }
-                // MuJoCo cameras look down their own -z with +y up; the URDF mount frame is
-                // x forward, y left, z up. Columns are permuted rather than multiplying by a
-                // constant rotation, which is the same mapping written more directly.
-                double R_cam[9];
-                for (int r = 0; r < 3; ++r) {
-                    R_cam[3 * r + 0] = -R_body[3 * r + 1];  // cam x  <- -body y
-                    R_cam[3 * r + 1] = R_body[3 * r + 2];   // cam y  <-  body z
-                    R_cam[3 * r + 2] = -R_body[3 * r + 0];  // cam z  <- -body x
-                }
-                std::memcpy(snapshot->cam_xpos + 3 * cam_id, cam_pos, sizeof(cam_pos));
-                std::memcpy(snapshot->cam_xmat + 9 * cam_id, R_cam, sizeof(R_cam));
-
-                mjv_updateScene(m, snapshot, &cam_opt, nullptr, &cam_cam, mjCAT_ALL, &cam_scn);
-                mjrRect vp{0, 0, cfg.camera_width, cfg.camera_height};
-                mjr_render(vp, &cam_scn, &cam_con);
-                mjr_readPixels(cam_rgb.data(), cam_depth.data(),
-                               vp, &cam_con);
-
-                // mjr_readPixels hands back the raw OpenGL depth buffer: non-linear, in
-                // [0,1]. Publishing it as metres would look plausible at every distance and
-                // be wrong at all of them, so it is linearised here against the model's own
-                // near/far planes.
-                // The frustum the render actually used, not vis.map. mjv_updateScene
-                // derives frustum_near/far per camera and mjr_render projects with those;
-                // reconstructing them from vis.map * stat.extent gives a different, wrong
-                // near plane and therefore a depth that is plausible at every range and
-                // correct at none.
-                const double znear = cam_scn.camera[0].frustum_near;
-                const double zfar  = cam_scn.camera[0].frustum_far;
-                for (std::size_t i = 0; i < cam_depth.size(); ++i) {
-                    const double z = cam_depth[i];
-                    cam_depth[i]   = (z >= 1.0)
-                                       ? std::numeric_limits<float>::quiet_NaN()
-                                       : static_cast<float>(
-                                             znear * zfar / (zfar - z * (zfar - znear)));
-                }
-
-                // Rows come out of GL bottom-up; ROS images are top-down.
-                const int w = cfg.camera_width, h = cfg.camera_height;
-                for (int y = 0; y < h / 2; ++y) {
-                    std::swap_ranges(cam_depth.begin() + static_cast<std::size_t>(y) * w,
-                                     cam_depth.begin() + static_cast<std::size_t>(y + 1) * w,
-                                     cam_depth.begin() + static_cast<std::size_t>(h - 1 - y) * w);
-                }
-                {
-                    const std::size_t stride = static_cast<std::size_t>(w) * 3;
-                    for (int y = 0; y < h / 2; ++y) {
-                        std::swap_ranges(cam_rgb.begin() + static_cast<std::size_t>(y) * stride,
-                                         cam_rgb.begin() + static_cast<std::size_t>(y + 1) * stride,
-                                         cam_rgb.begin() +
-                                             static_cast<std::size_t>(h - 1 - y) * stride);
-                    }
-                }
-
-                SensorFrameHeader dh{};
-                dh.magic         = kSensorFrameMagic;
-                dh.version       = kSensorFrameVersion;
-                dh.kind          = static_cast<uint32_t>(SensorFrameKind::Depth);
-                const std::size_t depth_bytes = cam_depth.size() * sizeof(float);
-                const std::size_t rgb_bytes    = cam_rgb.size();
-                dh.payload_bytes = static_cast<uint32_t>(depth_bytes + rgb_bytes);
-                dh.rgb_bytes     = static_cast<uint32_t>(rgb_bytes);
-                dh.sim_time_s    = sim_time;
-                std::memcpy(dh.sensor_pos, cam_pos, sizeof(cam_pos));
-                matrixToQuat(R_body, dh.sensor_quat);
-                dh.width    = static_cast<uint32_t>(w);
-                dh.height   = static_cast<uint32_t>(h);
-                dh.fovy_deg = static_cast<float>(m->cam_fovy[cam_id]);
-                // Colour rides in the same frame rather than a second one: it came from the
-                // same render, so pairing it up downstream could only lose that guarantee.
-                cam_payload.resize(depth_bytes + rgb_bytes);
-                std::memcpy(cam_payload.data(), cam_depth.data(), depth_bytes);
-                if (rgb_bytes != 0) {
-                    std::memcpy(cam_payload.data() + depth_bytes, cam_rgb.data(), rgb_bytes);
-                }
-                relay.send(dh, cam_payload.data(), cam_payload.size());
-            }
-            const auto cam_t2 = std::chrono::steady_clock::now();
-
-            static int    cam_n = 0;
-            static double cam_lock_ms = 0, cam_total_ms = 0;
-            cam_lock_ms += std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count();
-            cam_total_ms += std::chrono::duration<double, std::milli>(cam_t2 - cam_t0).count();
-            if (++cam_n % 100 == 0) {
-                std::fprintf(
-                    stderr, "[grove_g1] camera: %.2f ms/frame, %.3f ms under lock (%d frames)\n",
-                    cam_total_ms / cam_n, cam_lock_ms / cam_n, cam_n);
-            }
-        }
-
         relay.send(header, points.data(), points.size() * sizeof(float));
 
         std::this_thread::sleep_until(next);
     }
 
     mj_deleteData(snapshot);
+}
 
-    // The GL window, scene and context are deliberately NOT freed here. glfwDestroyWindow
-    // must run on the main thread, and calling it from this one segfaulted the simulator on
-    // reload. Leaking them is safe for the one case that reaches here: a model reload stops
-    // the sampler for good, so nothing touches these again, and the process frees them at
-    // exit. There is no restart path to reclaim them for.
+// The head camera, rendered on its own thread at camera_rate_hz.
+//
+// It used to render once per LiDAR sweep, which pinned depth at the sweep's 10 Hz. Its own
+// thread, own GL context and own pose snapshot let it run at a real D435i's 30 Hz without
+// slowing the sweep, and the sweep's ~32 ms of raycasting no longer sits between frames.
+// What it holds the sim lock for is the body/site/light transform arrays, a few microseconds.
+void cameraLoop(const Config cfg, mjModel** model, mjData** data, std::recursive_mutex* sim_mtx,
+                RelaySocket* relay_socket)
+{
+    mjModel* m = nullptr;
+    while (state().running.load(std::memory_order_relaxed) &&
+           ((m = *model) == nullptr || *data == nullptr)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!state().running.load(std::memory_order_relaxed)) {
+        return;
+    }
+    const int torso_id = mj_name2id(m, mjOBJ_BODY, "torso_link");
+    const int cam_id   = mj_name2id(m, mjOBJ_CAMERA, "d435i");
+    if (torso_id < 0 || cam_id < 0) {
+        std::fprintf(stderr, "[grove_g1] camera: no torso_link or no d435i camera in the model; "
+                             "camera DISABLED\n");
+        return;
+    }
+    double R_cam_mount[9];
+    rpyToMatrix(kCamRpy, R_cam_mount);
+
+    // Offscreen render state. Its own GL context on this thread: measured safe alongside the
+    // viewer's, and glfwCreateWindow off the main thread works here despite the docs.
+    mjvScene    cam_scn;
+    mjrContext  cam_con;
+    mjvOption   cam_opt;
+    mjvCamera   cam_cam;
+    GLFWwindow* cam_win = nullptr;
+    if (!(glfwInit() && (glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE), true) &&
+          (cam_win = glfwCreateWindow(cfg.camera_width, cfg.camera_height, "g1cam", nullptr,
+                                      nullptr)) != nullptr)) {
+        std::fprintf(stderr, "[grove_g1] camera: GL setup FAILED; disabled\n");
+        return;
+    }
+    glfwMakeContextCurrent(cam_win);
+    mjv_defaultScene(&cam_scn);
+    mjv_makeScene(m, &cam_scn, 2000);
+    mjr_defaultContext(&cam_con);
+    mjr_makeContext(m, &cam_con, mjFONTSCALE_100);
+    mjr_setBuffer(mjFB_OFFSCREEN, &cam_con);
+    mjv_defaultOption(&cam_opt);
+    mjv_defaultCamera(&cam_cam);
+    // FIXED and bound to our camera element, not FREE. A free camera ignores cam_xpos/cam_xmat
+    // entirely and orbits its own default pose, so every pose written below would be silently
+    // discarded and the depth would be identical whatever the robot did.
+    cam_cam.type       = mjCAMERA_FIXED;
+    cam_cam.fixedcamid = cam_id;
+    if (cam_con.offWidth < cfg.camera_width || cam_con.offHeight < cfg.camera_height) {
+        std::fprintf(stderr,
+                     "[grove_g1] camera: offscreen buffer %dx%d is smaller than %dx%d; set "
+                     "<visual><global offwidth offheight> in the scene. Camera DISABLED\n",
+                     cam_con.offWidth, cam_con.offHeight, cfg.camera_width, cfg.camera_height);
+        return;
+    }
+    std::vector<unsigned char> cam_rgb(static_cast<std::size_t>(cfg.camera_width) *
+                                       cfg.camera_height * 3);
+    std::vector<float>         cam_depth(static_cast<std::size_t>(cfg.camera_width) *
+                                         cfg.camera_height);
+    std::vector<unsigned char> cam_payload;
+    mjData*                    snapshot = mj_makeData(m);
+    std::fprintf(stderr, "[grove_g1] camera: offscreen %dx%d at %.1f Hz%s\n", cfg.camera_width,
+                 cfg.camera_height, cfg.camera_rate_hz, cfg.camera_rgb ? "" : ", depth only");
+
+    const auto period = std::chrono::duration<double>(1.0 / cfg.camera_rate_hz);
+    auto       next   = std::chrono::steady_clock::now();
+    while (state().running.load(std::memory_order_relaxed)) {
+        next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+        next = std::max(next, std::chrono::steady_clock::now());
+
+        // Transform arrays only, never mj_copyData: the copy is what MuJoCo refuses when the
+        // live stack is in use, and refusing aborts the process.
+        const auto cam_t0   = std::chrono::steady_clock::now();
+        double     sim_time = 0.0;
+        double     cam_torso_pos[3];
+        double     cam_torso_mat[9];
+        {
+            std::lock_guard<std::recursive_mutex> lock(*sim_mtx);
+            if (*model != m) {
+                // A viewer Reload freed the model this context and snapshot were built against:
+                // their mesh and texture ids index freed arrays. Rebuilding is more code than a
+                // debugging-only Reload deserves, so the camera stops and the LiDAR carries on.
+                // The GL objects are leaked on purpose: glfwDestroyWindow must run on the main
+                // thread, and calling it here segfaulted the simulator.
+                std::fprintf(
+                    stderr, "[grove_g1] camera DISABLED after model reload; restart the sim for it\n");
+                return;
+            }
+            const mjData* live = *data;
+            std::memcpy(snapshot->xpos, live->xpos, sizeof(mjtNum) * 3 * m->nbody);
+            std::memcpy(snapshot->xquat, live->xquat, sizeof(mjtNum) * 4 * m->nbody);
+            std::memcpy(snapshot->xmat, live->xmat, sizeof(mjtNum) * 9 * m->nbody);
+            std::memcpy(snapshot->geom_xpos, live->geom_xpos, sizeof(mjtNum) * 3 * m->ngeom);
+            std::memcpy(snapshot->geom_xmat, live->geom_xmat, sizeof(mjtNum) * 9 * m->ngeom);
+            if (m->nsite) {
+                std::memcpy(snapshot->site_xpos, live->site_xpos, sizeof(mjtNum) * 3 * m->nsite);
+                std::memcpy(snapshot->site_xmat, live->site_xmat, sizeof(mjtNum) * 9 * m->nsite);
+            }
+            if (m->nlight) {
+                std::memcpy(snapshot->light_xpos, live->light_xpos, sizeof(mjtNum) * 3 * m->nlight);
+                std::memcpy(snapshot->light_xdir, live->light_xdir, sizeof(mjtNum) * 3 * m->nlight);
+            }
+            std::memcpy(cam_torso_pos, live->xpos + 3 * torso_id, sizeof(cam_torso_pos));
+            std::memcpy(cam_torso_mat, live->xmat + 9 * torso_id, sizeof(cam_torso_mat));
+            sim_time = live->time;
+        }
+        const auto cam_t1 = std::chrono::steady_clock::now();
+
+        const double cam_row0 = cam_torso_mat[0] * cam_torso_mat[0] +
+                                cam_torso_mat[1] * cam_torso_mat[1] +
+                                cam_torso_mat[2] * cam_torso_mat[2];
+        if (!std::isfinite(cam_row0) || cam_row0 < 0.5) {
+            std::this_thread::sleep_until(next);
+            continue;
+        }
+        // Our own snapshot, so writing the camera pose straight into it is safe and avoids
+        // needing a mocap body or a camera on the vendored robot.
+        double cam_pos[3];
+        for (int r = 0; r < 3; ++r) {
+            cam_pos[r] = cam_torso_pos[r] + cam_torso_mat[3 * r + 0] * kCamXyz[0] +
+                         cam_torso_mat[3 * r + 1] * kCamXyz[1] +
+                         cam_torso_mat[3 * r + 2] * kCamXyz[2];
+        }
+        double R_body[9];
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                double acc = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    acc += cam_torso_mat[3 * r + k] * R_cam_mount[3 * k + c];
+                }
+                R_body[3 * r + c] = acc;
+            }
+        }
+        // MuJoCo cameras look down their own -z with +y up; the URDF mount frame is x forward,
+        // y left, z up. Columns are permuted rather than multiplying by a constant rotation,
+        // which is the same mapping written more directly.
+        double R_cam[9];
+        for (int r = 0; r < 3; ++r) {
+            R_cam[3 * r + 0] = -R_body[3 * r + 1];  // cam x  <- -body y
+            R_cam[3 * r + 1] = R_body[3 * r + 2];   // cam y  <-  body z
+            R_cam[3 * r + 2] = -R_body[3 * r + 0];  // cam z  <- -body x
+        }
+        std::memcpy(snapshot->cam_xpos + 3 * cam_id, cam_pos, sizeof(cam_pos));
+        std::memcpy(snapshot->cam_xmat + 9 * cam_id, R_cam, sizeof(R_cam));
+
+        mjv_updateScene(m, snapshot, &cam_opt, nullptr, &cam_cam, mjCAT_ALL, &cam_scn);
+        mjrRect vp{0, 0, cfg.camera_width, cfg.camera_height};
+        mjr_render(vp, &cam_scn, &cam_con);
+        mjr_readPixels(cfg.camera_rgb ? cam_rgb.data() : nullptr, cam_depth.data(), vp, &cam_con);
+
+        // mjr_readPixels hands back the raw OpenGL depth buffer: non-linear, in [0,1].
+        // Publishing it as metres would look plausible at every distance and be wrong at all
+        // of them, so it is linearised here against the frustum the render actually used --
+        // not vis.map: mjv_updateScene derives frustum_near/far per camera and mjr_render
+        // projects with those.
+        const double znear = cam_scn.camera[0].frustum_near;
+        const double zfar  = cam_scn.camera[0].frustum_far;
+        for (float& px : cam_depth) {
+            const double z = px;
+            px             = (z >= 1.0) ? std::numeric_limits<float>::quiet_NaN()
+                                        : static_cast<float>(znear * zfar / (zfar - z * (zfar - znear)));
+        }
+
+        // Rows come out of GL bottom-up; ROS images are top-down.
+        const int w = cfg.camera_width, h = cfg.camera_height;
+        for (int y = 0; y < h / 2; ++y) {
+            std::swap_ranges(cam_depth.begin() + static_cast<std::size_t>(y) * w,
+                             cam_depth.begin() + static_cast<std::size_t>(y + 1) * w,
+                             cam_depth.begin() + static_cast<std::size_t>(h - 1 - y) * w);
+        }
+        const std::size_t rgb_bytes = cfg.camera_rgb ? cam_rgb.size() : 0;
+        if (rgb_bytes != 0) {
+            const std::size_t stride = static_cast<std::size_t>(w) * 3;
+            for (int y = 0; y < h / 2; ++y) {
+                std::swap_ranges(cam_rgb.begin() + static_cast<std::size_t>(y) * stride,
+                                 cam_rgb.begin() + static_cast<std::size_t>(y + 1) * stride,
+                                 cam_rgb.begin() + static_cast<std::size_t>(h - 1 - y) * stride);
+            }
+        }
+
+        SensorFrameHeader dh{};
+        dh.magic                      = kSensorFrameMagic;
+        dh.version                    = kSensorFrameVersion;
+        dh.kind                       = static_cast<uint32_t>(SensorFrameKind::Depth);
+        const std::size_t depth_bytes = cam_depth.size() * sizeof(float);
+        dh.payload_bytes              = static_cast<uint32_t>(depth_bytes + rgb_bytes);
+        dh.rgb_bytes                  = static_cast<uint32_t>(rgb_bytes);
+        // The instant the poses were snapshotted, which is the instant the image shows. The
+        // relay stamps from it, so TF looked up at the image's stamp is the camera's pose
+        // when it saw the image, not ~10 ms later when it arrived.
+        dh.sim_time_s = sim_time;
+        std::memcpy(dh.sensor_pos, cam_pos, sizeof(cam_pos));
+        matrixToQuat(R_body, dh.sensor_quat);
+        dh.width    = static_cast<uint32_t>(w);
+        dh.height   = static_cast<uint32_t>(h);
+        dh.fovy_deg = static_cast<float>(m->cam_fovy[cam_id]);
+        // Colour rides in the same frame rather than a second one: it came from the same
+        // render, so pairing it up downstream could only lose that guarantee.
+        cam_payload.resize(depth_bytes + rgb_bytes);
+        std::memcpy(cam_payload.data(), cam_depth.data(), depth_bytes);
+        if (rgb_bytes != 0) {
+            std::memcpy(cam_payload.data() + depth_bytes, cam_rgb.data(), rgb_bytes);
+        }
+        relay_socket->send(dh, cam_payload.data(), cam_payload.size());
+        const auto cam_t2 = std::chrono::steady_clock::now();
+
+        static int    cam_n       = 0;
+        static double cam_lock_ms = 0, cam_total_ms = 0;
+        cam_lock_ms += std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count();
+        cam_total_ms += std::chrono::duration<double, std::milli>(cam_t2 - cam_t0).count();
+        if (++cam_n % 300 == 0) {
+            std::fprintf(stderr,
+                         "[grove_g1] camera: %.2f ms/frame (budget %.1f), %.3f ms under lock\n",
+                         cam_total_ms / 300, 1000.0 / cfg.camera_rate_hz, cam_lock_ms / 300);
+            cam_lock_ms = cam_total_ms = 0;
+        }
+        std::this_thread::sleep_until(next);
+    }
+    mj_deleteData(snapshot);
 }
 
 // The Mid360's own IMU, sampled on its own thread.
@@ -978,6 +1008,10 @@ void StartSensorPublisher(mjModel** model, mjData** data, std::recursive_mutex* 
     state().relay      = std::make_unique<RelaySocket>(cfg.socket_path);
     state().thread     = std::thread(sensorLoop, cfg, model, data, sim_mtx, state().relay.get());
     state().imu_thread = std::thread(imuLoop, cfg, model, data, sim_mtx, state().relay.get());
+    if (cfg.camera_enabled) {
+        state().camera_thread =
+            std::thread(cameraLoop, cfg, model, data, sim_mtx, state().relay.get());
+    }
 }
 
 void StopSensorPublisher()
@@ -997,6 +1031,9 @@ void StopSensorPublisher()
     }
     if (s.imu_thread.joinable()) {
         s.imu_thread.join();
+    }
+    if (s.camera_thread.joinable()) {
+        s.camera_thread.join();
     }
     // Closed only now, with both threads stopped: the relay sees EOF and logs a disconnect
     // rather than holding a connection that will never carry another frame.
