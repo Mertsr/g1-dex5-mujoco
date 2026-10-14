@@ -32,6 +32,9 @@ enum class ObjectSource
 {
     /// MuJoCo body poses, sampled inside the simulator and carried by g1_sensor_relay.
     kSimGroundTruth,
+    /// g1_perception's model-based tracker on the head depth camera: measured poses of the
+    /// parts it has models for, in the simulator and on the robot alike.
+    kDepthTracker,
     /// Not implemented. Refuses to configure; see the node's on_configure.
     kHardware,
 };

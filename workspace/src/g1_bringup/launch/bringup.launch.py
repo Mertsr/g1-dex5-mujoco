@@ -140,6 +140,20 @@ def _manipulation_share():
         ) from exc
 
 
+def _perception_share():
+    """g1_perception's share directory, or a message an operator can act on."""
+    try:
+        return get_package_share_directory("g1_perception")
+    except PackageNotFoundError as exc:
+        raise RuntimeError(
+            "bringup.launch.py: the object tracker (object_tracker:=true, or "
+            "object_source:=depth_tracker) needs the g1_perception package, which is not on "
+            "the ament prefix path.\n"
+            "  - Build it:  colcon build --packages-select g1_perception\n"
+            "  - Then source install/setup.bash again in this shell."
+        ) from exc
+
+
 def _simulator(sim_args):
     """The one simulator this file stages, and the only place it is named.
 
@@ -171,6 +185,12 @@ def _setup(context, *args, **kwargs):
     want_moveit = LaunchConfiguration("moveit").perform(context).lower() == "true"
     want_manipulation = LaunchConfiguration("manipulation").perform(context).lower() == "true"
     pin_pelvis = LaunchConfiguration("pin_pelvis").perform(context).lower() == "true"
+    object_source = LaunchConfiguration("object_source").perform(context)
+    # The tracker runs when asked for, and whenever the skills are told to read it: a
+    # depth_tracker source with no tracker publishing is a pose source that never sees a part.
+    want_tracker = LaunchConfiguration("object_tracker").perform(context).lower() == "true" or (
+        want_manipulation and object_source == "depth_tracker"
+    )
 
     if want_nav and mode != "localization":
         raise RuntimeError(
@@ -209,8 +229,10 @@ def _setup(context, *args, **kwargs):
         # manipulation:=true forces it for a different reason: object ground truth leaves the
         # simulator over the sensor relay's own socket, so without sensors the pose source
         # comes up healthy, subscribes, and never receives anything.
+        #
+        # The object tracker forces it too: it tracks from the head camera's depth.
         "sensors": "true"
-        if navigating or want_manipulation
+        if navigating or want_manipulation or want_tracker
         else LaunchConfiguration("sensors"),
         "world": LaunchConfiguration("world"),
         "odometry": LaunchConfiguration("odometry"),
@@ -286,6 +308,22 @@ def _setup(context, *args, **kwargs):
                 ),
                 launch_arguments={
                     "object_source": LaunchConfiguration("object_source"),
+                }.items(),
+            )
+        )
+
+    if want_tracker:
+        # Model-based 6D tracking of the line's parts from the head depth camera. Independent of
+        # MoveIt: with manipulation off it still publishes detections and tracked/<name> TF
+        # frames, which is how to look at what it sees in RViz.
+        actions.append(
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(_perception_share(), "launch", "object_tracker.launch.py")
+                ),
+                launch_arguments={
+                    "config": LaunchConfiguration("object_tracker_config").perform(context)
+                    or os.path.join(_perception_share(), "config", "object_tracker_conveyor.yaml"),
                 }.items(),
             )
         )
@@ -419,8 +457,20 @@ def generate_launch_description():
             "object_source",
             default_value="sim_ground_truth",
             description="Where object poses come from with manipulation:=true. "
-            "'sim_ground_truth' reads MuJoCo bodies; 'hardware' refuses to configure, because "
-            "no object-detection pipeline exists yet.",
+            "'sim_ground_truth' reads MuJoCo bodies; 'depth_tracker' reads g1_perception's "
+            "model-based tracker on the head camera (started automatically); 'hardware' refuses "
+            "to configure.",
+        ),
+        DeclareLaunchArgument(
+            "object_tracker",
+            default_value="false",
+            description="Start g1_perception's object tracker (forces sensors:=true). Implied by "
+            "manipulation:=true object_source:=depth_tracker.",
+        ),
+        DeclareLaunchArgument(
+            "object_tracker_config",
+            default_value="",
+            description="The tracker's YAML. Empty: g1_perception's conveyor configuration.",
         ),
         DeclareLaunchArgument(
             "activate_arm",

@@ -32,14 +32,16 @@ touching them.
 | `object_source` | Behaviour |
 |---|---|
 | `sim_ground_truth` | MuJoCo body poses, sampled inside the simulator and carried out by `g1_sensor_relay`. |
-| `hardware` (default) | **Refuses to configure.** There is no object-detection pipeline on this robot yet. |
+| `depth_tracker` | Measured poses from `g1_perception`'s model-based tracker on the head depth camera, for the parts it has models of. Same on the robot as in the simulator. See `g1_perception/README.md`. |
+| `hardware` (default) | **Refuses to configure.** There is no general object detector; use `depth_tracker` for modelled parts. |
 
 `hardware` is the default deliberately, matching `g1_state_estimation`'s odometry source: a
 bring-up that forgets to say what it has must fail visibly rather than feed a grasp planner
 simulator ground truth it cannot tell from a measurement.
 
-These poses are exact — no noise, no occlusion, no misdetection, and every listed object is
-always visible. Nothing here validates behaviour under a detector that is wrong.
+Ground-truth poses are exact — no noise, no occlusion, no misdetection, and every listed object
+is always visible. `depth_tracker` poses are measurements: an object appears only while it is
+tracked and verified against the depth image.
 
 `/objects` is `vision_msgs/Detection3DArray` in `odom`, carrying a pose and a bounding box per
 object. The box is what the server builds its collision geometry from, so replacing the source

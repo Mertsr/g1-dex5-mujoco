@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -56,7 +56,18 @@ def generate_launch_description():
             {"object_source": LaunchConfiguration("object_source")},
         ],
         remappings=[
-            ("~/object_poses", "/g1_sensor_relay/object_poses"),
+            # Ground truth from the relay, or measurements from g1_perception's tracker. Both
+            # are Detection3DArray in the camera frame, so nothing past this node can tell.
+            (
+                "~/object_poses",
+                PythonExpression(
+                    [
+                        "'/g1_object_tracker/detections' if '",
+                        LaunchConfiguration("object_source"),
+                        "' == 'depth_tracker' else '/g1_sensor_relay/object_poses'",
+                    ]
+                ),
+            ),
             ("~/objects", "/objects"),
             ("~/object_markers", "/object_markers"),
         ],
@@ -104,8 +115,9 @@ def generate_launch_description():
                 default_value="sim_ground_truth",
                 description=(
                     "Where object poses come from. 'sim_ground_truth' reads MuJoCo bodies "
-                    "through g1_sensor_relay; 'hardware' refuses to configure, because no "
-                    "object-detection pipeline exists yet."
+                    "through g1_sensor_relay; 'depth_tracker' reads g1_perception's model-based "
+                    "tracker (start object_tracker.launch.py too); 'hardware' refuses to "
+                    "configure."
                 ),
             ),
             object_source,

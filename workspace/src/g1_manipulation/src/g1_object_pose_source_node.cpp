@@ -35,6 +35,11 @@ bool parseObjectSource(const std::string& name, ObjectSource& out)
         out = ObjectSource::kSimGroundTruth;
         return true;
     }
+    if (name == "depth_tracker")
+    {
+        out = ObjectSource::kDepthTracker;
+        return true;
+    }
     if (name == "hardware")
     {
         out = ObjectSource::kHardware;
@@ -59,7 +64,8 @@ bool G1ObjectPoseSource::readParameters()
     {
         RCLCPP_ERROR(
             get_logger(),
-            "object_source='%s' is not a known source. Use 'sim_ground_truth' or 'hardware'.",
+            "object_source='%s' is not a known source. Use 'sim_ground_truth', 'depth_tracker' or "
+            "'hardware'.",
             source_name.c_str());
         return false;
     }
@@ -71,11 +77,11 @@ bool G1ObjectPoseSource::readParameters()
         // reads as a broken topic rather than as an unbuilt milestone.
         RCLCPP_ERROR(
             get_logger(),
-            "object_source='hardware' is not implemented: there is no object-detection "
-            "pipeline on this robot yet. Manipulation-perception (instance segmentation and "
-            "6D pose estimation, see the architecture notes Layer 3) is its own milestone. "
-            "Refusing to configure rather than let a grasp planner run on simulator ground "
-            "truth it cannot tell apart from a real measurement.");
+            "object_source='hardware' is not implemented as a general detector. For the parts "
+            "g1_perception has models of, use object_source='depth_tracker' with "
+            "g1_perception's object_tracker.launch.py running. Refusing to configure rather "
+            "than let a grasp planner run on simulator ground truth it cannot tell apart from "
+            "a real measurement.");
         return false;
     }
 
@@ -118,6 +124,18 @@ G1ObjectPoseSource::CallbackReturn G1ObjectPoseSource::on_configure(const rclcpp
             onGroundTruth(std::move(msg));
         });
 
+    if (source_ == ObjectSource::kDepthTracker)
+    {
+        RCLCPP_INFO(
+            get_logger(),
+            "Configured on the depth tracker: %s in '%s' -> %s in '%s'. Measured poses: an "
+            "object appears only while it is tracked and verified against the depth image.",
+            source_sub_->get_topic_name(),
+            source_frame_id_.c_str(),
+            objects_pub_->get_topic_name(),
+            output_frame_id_.c_str());
+        return CallbackReturn::SUCCESS;
+    }
     RCLCPP_INFO(
         get_logger(),
         "Configured on simulator ground truth: %s in '%s' -> %s in '%s'. These are exact "
