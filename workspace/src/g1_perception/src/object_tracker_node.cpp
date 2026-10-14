@@ -121,6 +121,19 @@ ObjectTrackerNode::ObjectTrackerNode(const rclcpp::NodeOptions& options)
     debug_image_pub_   = create_publisher<sensor_msgs::msg::Image>("~/debug/image", rclcpp::QoS(1));
     debug_markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/debug/markers", rclcpp::QoS(1));
     debug_points_pub_  = create_publisher<sensor_msgs::msg::PointCloud2>("~/debug/points", rclcpp::QoS(1));
+    depth_topic_       = depth_topic;
+    info_topic_        = info_topic;
+    // No frames at all is the commonest reason for a blank view: say so, once a second.
+    debug_timer_ = create_wall_timer(std::chrono::seconds(1), [this]() {
+        if (debug_image_pub_->get_subscription_count() == 0 ||
+            std::chrono::steady_clock::now() - last_depth_ < std::chrono::seconds(2))
+        {
+            return;
+        }
+        publishDebugReason("no depth on " + depth_topic_ + " (" + std::to_string(depth_sub_->get_publisher_count()) +
+                               " publishers). Simulator: sensors:=true, camera_enabled in sim_sensors.yaml",
+                           nullptr);
+    });
 
     RCLCPP_INFO(get_logger(), "tracking from %s in '%s', detections on %s in '%s'", depth_topic.c_str(),
                 world_frame_.c_str(), detections_pub_->get_topic_name(), output_frame_.c_str());
@@ -249,9 +262,11 @@ std::optional<Eigen::Isometry3f> ObjectTrackerNode::lookup(const std::string& ta
 
 void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
 {
+    last_depth_ = std::chrono::steady_clock::now();
     if (!intrinsics_)
     {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for camera_info");
+        publishDebugReason("depth arrives, but no camera_info on " + info_topic_, nullptr);
         return;
     }
     const Intrinsics& k = *intrinsics_;
@@ -270,6 +285,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
     {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "depth encoding '%s' is not 32FC1 or 16UC1",
                               msg->encoding.c_str());
+        publishDebugReason("depth encoding '" + msg->encoding + "' is not 32FC1 or 16UC1", nullptr);
         return;
     }
     if (msg->is_bigendian || static_cast<int>(msg->width) != k.width || static_cast<int>(msg->height) != k.height ||
@@ -278,6 +294,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
                               "depth image %ux%u (step %u, %zu bytes) does not match camera_info %dx%d", msg->width,
                               msg->height, msg->step, msg->data.size(), k.width, k.height);
+        publishDebugReason("depth image size does not match camera_info", nullptr);
         return;
     }
     depth.data       = msg->data.data();
@@ -291,6 +308,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
     {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no transform %s -> %s at the image stamp; skipping",
                              world_frame_.c_str(), msg->header.frame_id.c_str());
+        publishDebugReason("no TF " + world_frame_ + " -> " + msg->header.frame_id + " at the image stamp", msg.get());
         return;
     }
     // The core takes seconds as a double; counted from the first frame so they keep
@@ -319,6 +337,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no transform %s -> %s; not publishing",
                                  output_frame_.c_str(), msg->header.frame_id.c_str());
+            publishDebugReason("no TF " + output_frame_ + " -> " + msg->header.frame_id, msg.get());
             return;
         }
         out_T_cam = *t;
@@ -388,6 +407,44 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
     {
         publishDebug(*msg, depth, k, *world_T_cam, results);
     }
+}
+
+void ObjectTrackerNode::publishDebugReason(const std::string& reason, const sensor_msgs::msg::Image* msg)
+{
+    if (debug_image_pub_->get_subscription_count() == 0)
+    {
+        return;
+    }
+    auto img = std::make_unique<sensor_msgs::msg::Image>();
+    int  w = 848, h = 480;
+    // The depth itself under the message when there is a usable frame, else a blank one.
+    if (msg != nullptr && intrinsics_ && msg->encoding == sensor_msgs::image_encodings::TYPE_32FC1 &&
+        static_cast<int>(msg->width) == intrinsics_->width && static_cast<int>(msg->height) == intrinsics_->height)
+    {
+        DepthImage d;
+        d.data = msg->data.data(), d.width = intrinsics_->width, d.height = intrinsics_->height;
+        d.step_bytes = static_cast<int>(msg->step);
+        renderDebugImage(d, *intrinsics_, {}, 0.015f, img->data, w, h);
+        img->header = msg->header;
+    }
+    else
+    {
+        img->data.assign(static_cast<std::size_t>(w) * h * 3, 30);
+        img->header.stamp = now();
+    }
+    drawText(img->data, w, h, 8, h / 2 - 20, "TRACKER NOT RUNNING:", { 255, 60, 60 });
+    // Wrapped to the image width.
+    const std::size_t per_line = static_cast<std::size_t>(std::max(10, (w - 16) / 7));
+    int               y        = h / 2;
+    for (std::size_t i = 0; i < reason.size(); i += per_line, y += 15)
+    {
+        drawText(img->data, w, h, 8, y, reason.substr(i, per_line), { 255, 255, 255 });
+    }
+    img->width    = static_cast<std::uint32_t>(w);
+    img->height   = static_cast<std::uint32_t>(h);
+    img->encoding = sensor_msgs::image_encodings::RGB8;
+    img->step     = static_cast<std::uint32_t>(w * 3);
+    debug_image_pub_->publish(std::move(img));
 }
 
 bool ObjectTrackerNode::debugWanted() const

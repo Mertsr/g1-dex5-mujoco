@@ -17,6 +17,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <chrono>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <map>
 #include <memory>
@@ -47,6 +48,9 @@ private:
                                             const rclcpp::Time& stamp, double timeout_s);
     /// The three debug views (see README "Watching it work"). Built only while someone subscribes.
     bool debugWanted() const;
+    /// When the tracker cannot run on a frame (no camera_info, no TF, a bad encoding) or gets no
+    /// frames at all, the debug image says so instead of staying blank.
+    void publishDebugReason(const std::string& reason, const sensor_msgs::msg::Image* msg);
     void publishDebug(const sensor_msgs::msg::Image& msg, const DepthImage& depth, const Intrinsics& k,
                       const Eigen::Isometry3f& world_T_cam, const std::vector<MultiTracker::Result>& results);
     void publishStatus(const std_msgs::msg::Header& header, const std::vector<MultiTracker::Result>& results,
@@ -71,6 +75,9 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr               debug_image_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr  debug_markers_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr         debug_points_pub_;
+    rclcpp::TimerBase::SharedPtr debug_timer_;
+    std::string                  depth_topic_, info_topic_;
+    std::chrono::steady_clock::time_point last_depth_{};
     std::vector<std::string> mesh_urls_;    ///< per object, for RViz mesh markers
     std::vector<double>      mesh_scales_;
     rclcpp::Time                                                       last_status_{ 0, 0, RCL_ROS_TIME };
