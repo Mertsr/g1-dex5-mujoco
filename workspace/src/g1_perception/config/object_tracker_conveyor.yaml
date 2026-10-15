@@ -58,14 +58,16 @@ g1_object_tracker:
       # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
       # e.g. "right_hand_palm_link 0.0 0.0 0.05 0 0 0" -- the grasp, as the skill holds it.
       #
-      # Then the tray beside the line (the scene's part_tray_1..4, in odom). Several priors in
-      # view at once is fine: the search keeps the one the depth confirms best, and one panel is
-      # tracked at a time.
+      # Then the tray beside the line (the scene's part_tray_1..4, in odom), AS THEY REST: on a
+      # flat tray a panel tips 15.8 degrees onto its clips and drops 23 mm, which put the
+      # as-authored poses outside what a prior search can pull in. Measured by settling the scene.
+      # Several priors in view at once is fine: the search keeps the one the depth confirms best,
+      # and one panel is tracked at a time.
       priors:
-        - "odom 1.6510 -0.8 0.800 -1.5708 0.0 -1.5700"
-        - "odom 1.8010 -0.8 0.800 -1.5708 0.0 -1.5700"
-        - "odom 1.9510 -0.8 0.800 -1.5708 0.0 -1.5700"
-        - "odom 2.1010 -0.8 0.800 -1.5708 0.0 -1.5700"
+        - "odom 1.6397 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
+        - "odom 1.7897 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
+        - "odom 1.9397 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
+        - "odom 2.0897 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
         - "pallet  0.2722 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet  0.1216 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet -0.0290 0.0 0.0614 -1.5930 -0.0006 -1.5700"
@@ -80,16 +82,23 @@ g1_object_tracker:
       # The pose is the RIGHT hand's grasp frame at the grasp (x along the fingers = the approach
       # direction, fingers closing toward +y, thumb on +z); the left hand mirrors it.
       #
-      # edge_high: the panel's tall long edge, at its middle -- the side opposite the round
-      # boss's near edge. Panels sit back to back in the nests and on the tray, so the hand
-      # comes from ABOVE: fingers pointing down past the outside of the edge wall (it stands
-      # ~24 mm above the neighbour's low edge), curling in under the lip, thumb on the top face.
+      # edge_high_a / edge_high_b: the panel's tall long edge, at its middle -- the side
+      # opposite the round boss's near edge. Panels sit back to back in the nests and on the tray,
+      # so the hand comes from ABOVE, closing across the edge toward the panel's inside.
+      #
+      # The fingers are tipped 45 degrees along the edge, not straight down: an IK sweep of the
+      # G1 arm reaches a fingers-down grasp almost nowhere, and the 45-degree one everywhere from
+      # 0.25 to 0.45 m ahead of the pelvis and up to 0.35 m to the side. The two variants tip
+      # toward opposite ends of the panel; Pick tries first the one whose fingers point most
+      # AWAY from the robot, then the other, so the robot can come at a panel from either end.
+      #
       # In the panel's world-aligned axes the hand closes at x = -60 mm (8 mm inside the wall's
-      # outer face at -68), y = 0, z = +50 mm; this line is the same pose in its body frame.
+      # outer face at -68), y = 0, z = +50 mm; these lines are the same poses in its body frame.
       # FIRST GUESS from the CAD, not a measured grip: check it in RViz (rviz/perception.rviz
       # draws it as a gripper) and adjust before trusting a pick.
       grasps:
-        - "edge_high  0.0 -0.050 -0.060  1.5708 0.0 1.5708"
+        - "edge_high_a  0.000 -0.050 -0.060  1.5708 0.0 2.3562"
+        - "edge_high_b  0.000 -0.050 -0.060  1.5708 0.0 0.7854"
 
     # Shared by every object.
     tracking:

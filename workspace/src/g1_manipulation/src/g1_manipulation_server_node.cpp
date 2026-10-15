@@ -631,37 +631,52 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         abort_locating("could not transform the object pose");
         return;
     }
-    // An object that publishes its own grasp ("<object>/grasp/<name>", from g1_perception's
-    // tracker) is taken there, straight in along the grasp's approach axis. Anything else gets
-    // the top grasp graspFrameGoal() builds from its bounding box.
-    std::optional<geometry_msgs::msg::Pose> grasp_pose;
-    std::string                             grasp_name;
-    if (const auto g = findHypothesisPrefix(*detection, goal->object_id + "/grasp/"))
+    // An object that publishes its own grasps ("<object>/grasp/<name>", from g1_perception's
+    // tracker) is taken at one of them, straight in along the grasp's approach axis. Anything
+    // else gets the top grasp graspFrameGoal() builds from its bounding box.
+    struct Candidate
     {
-        grasp_name = g->first;
-        grasp_pose = toPlanningFrame(g->second, object_frame);
-        if (!grasp_pose)
+        std::string                             name;
+        std::optional<geometry_msgs::msg::Pose> pose;  ///< planning frame; empty = bounding box
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& r : detection->results)
+    {
+        if (r.hypothesis.class_id.rfind(goal->object_id + "/grasp/", 0) != 0)
         {
-            abort_locating("could not transform the grasp pose");
+            continue;
+        }
+        const auto pose = toPlanningFrame(r.pose.pose, object_frame);
+        if (!pose)
+        {
+            abort_locating("could not transform " + r.hypothesis.class_id);
             return;
         }
+        candidates.push_back({ r.hypothesis.class_id, pose });
+    }
+    // Fingers pointing most AWAY from the robot first: a part's grasps usually come as mirror
+    // pairs tipped toward either end of it, and the one leaning away is the one an arm reaching
+    // out from the pelvis can take. The others are still tried, in that order.
+    const auto forwardness = [](const geometry_msgs::msg::Pose& pose) {
+        tf2::Quaternion q;
+        tf2::fromMsg(pose.orientation, q);
+        return tf2::Matrix3x3(q).getColumn(0).x();  // fingers' component along pelvis +x
+    };
+    std::stable_sort(candidates.begin(), candidates.end(), [&](const Candidate& a, const Candidate& b) {
+        return forwardness(*a.pose) > forwardness(*b.pose);
+    });
+    if (candidates.empty())
+    {
+        candidates.push_back({ "the bounding-box top grasp", std::nullopt });
     }
 
-    // "auto": the hand on the side the grasp point is on. The planning frame is the pelvis,
-    // +y to the robot's left.
-    std::string arm_name = goal->arm;
-    if (arm_name == "auto")
-    {
-        const double y = grasp_pose ? grasp_pose->position.y : object_pose->position.y;
-        arm_name       = y >= 0.0 ? "left" : "right";
-    }
-    ArmContext arm;
-    resolveArm(arm_name, arm);
-    MoveGroup* arm_group  = groupFor(arm.arm_group);
-    MoveGroup* hand_group = groupFor(arm.hand_group);
-    const std::string how = grasp_pose ? "at " + grasp_name : std::string("from above (bounding box)");
-    RCLCPP_INFO(get_logger(), "pick %s with the %s hand, %s", goal->object_id.c_str(), arm_name.c_str(),
-                how.c_str());
+    // Filled for whichever candidate's pregrasp turns out reachable.
+    ArmContext                              arm;
+    MoveGroup*                              arm_group  = nullptr;
+    MoveGroup*                              hand_group = nullptr;
+    std::string                             arm_name;
+    std::optional<geometry_msgs::msg::Pose> grasp_pose;
+    geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
@@ -678,36 +693,63 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     const moveit_msgs::msg::CollisionObject object =
         publishCollisionObject(*detection, *object_pose);
 
-    const geometry_msgs::msg::Pose grasp_goal =
-        grasp_pose ? handGoalFromGrasp(*grasp_pose, arm.is_left)
-                   : graspFrameGoal(*object_pose, detection->bbox.size.z, arm);
-    geometry_msgs::msg::Pose pregrasp_goal = grasp_goal;
-    if (grasp_pose)
-    {
-        pregrasp_goal = backOff(grasp_goal, grasp_approach_m_);
-    }
-    else
-    {
-        pregrasp_goal.position.z += approach_height_m_;
-    }
-
     feedback->phase = Pick::Feedback::PHASE_PREGRASP;
     goal_handle->publish_feedback(feedback);
-    // Opened before the approach, not after: closing on the way in would knock the object off
-    // the table before the hand is around it.
-    //
-    // Reported separately from the arm move rather than sharing one message. They fail for
-    // completely different reasons -- a hand that will not open is usually an unacquired or
-    // unpowered hand, an arm that will not reach is geometry -- and collapsing both into
-    // "could not reach the pregrasp pose" sends anyone debugging it to the wrong place.
-    if (!moveToNamed(*hand_group, "open"))
+    bool        reached = false;
+    std::string tried;
+    for (const Candidate& c : candidates)
     {
-        fail(Pick::Feedback::PHASE_PREGRASP, "the hand would not open");
-        return;
+        // "auto": the hand on the side the grasp point is on. The planning frame is the pelvis,
+        // +y to the robot's left.
+        arm_name = goal->arm;
+        if (arm_name == "auto")
+        {
+            const double y = c.pose ? c.pose->position.y : object_pose->position.y;
+            arm_name       = y >= 0.0 ? "left" : "right";
+        }
+        resolveArm(arm_name, arm);
+        arm_group  = groupFor(arm.arm_group);
+        hand_group = groupFor(arm.hand_group);
+        grasp_pose = c.pose;
+        grasp_goal = grasp_pose ? handGoalFromGrasp(*grasp_pose, arm.is_left)
+                                : graspFrameGoal(*object_pose, detection->bbox.size.z, arm);
+        if (grasp_pose)
+        {
+            pregrasp_goal = backOff(grasp_goal, grasp_approach_m_);
+        }
+        else
+        {
+            pregrasp_goal = grasp_goal;
+            pregrasp_goal.position.z += approach_height_m_;
+        }
+        RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", goal->object_id.c_str(),
+                    c.name.c_str(), arm_name.c_str());
+
+        // Opened before the approach, not after: closing on the way in would knock the object
+        // off the table before the hand is around it.
+        //
+        // Reported separately from the arm move rather than sharing one message. They fail for
+        // completely different reasons -- a hand that will not open is usually an unacquired or
+        // unpowered hand, an arm that will not reach is geometry -- and collapsing both into
+        // "could not reach the pregrasp pose" sends anyone debugging it to the wrong place.
+        if (!moveToNamed(*hand_group, "open"))
+        {
+            fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
+            return;
+        }
+        if (moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, "pregrasp (" + c.name + ")"))
+        {
+            reached = true;
+            break;
+        }
+        tried += (tried.empty() ? "" : ", ") + c.name + " (" + arm_name + ")";
     }
-    if (!moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, "pregrasp"))
+    if (!reached)
     {
-        fail(Pick::Feedback::PHASE_PREGRASP, "could not reach the pregrasp pose");
+        fail(Pick::Feedback::PHASE_PREGRASP,
+             "could not reach the pregrasp of any grasp: " + tried +
+                 ". Stand so the grasp point is 0.25-0.45 m ahead of the pelvis and within 0.35 m "
+                 "to the side of it.");
         return;
     }
 

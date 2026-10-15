@@ -65,8 +65,11 @@ meaningful rather than a replay.
 A detection may carry more than its pose. `g1_perception`'s tracker adds, after the object's own
 result:
 
-- `<object>/grasp/<name>`: where a hand takes it. `Pick` uses the first one it finds instead of the
-  bounding-box top grasp below. The pose is the RIGHT hand's grasp frame at the grasp (x along the
+- `<object>/grasp/<name>`: where a hand takes it. `Pick` uses these instead of the bounding-box top
+  grasp below. It tries them in order, the one whose fingers point most away from the robot first,
+  and takes the first whose pregrasp it can reach. Reach for a grasp tipped 45 degrees is 0.25 to
+  0.45 m ahead of the pelvis and up to 0.35 m to the side; a fingers-straight-down grasp is
+  reachable almost nowhere on the G1, according to an IK sweep. The pose is the RIGHT hand's grasp frame at the grasp (x along the
   fingers, which is the approach direction; fingers closing toward +y; thumb on +z), and the left
   hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
   (0.12) back along the fingers, then straight in on a Cartesian path, closes, and lifts straight
