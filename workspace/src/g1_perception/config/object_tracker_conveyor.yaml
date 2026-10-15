@@ -96,17 +96,9 @@ g1_object_tracker:
       # outer face at -68), y = 0, z = +50 mm; these lines are the same poses in its body frame.
       # FIRST GUESS from the CAD, not a measured grip: check it in RViz (rviz/perception.rviz
       # draws it as a gripper) and adjust before trusting a pick.
-      #
-      # edge_near_a / edge_near_b: the same grip 120 mm along the edge toward the end the robot
-      # stands at (each paired with the tilt that points its fingers away from that end). The
-      # middle of a panel lying across the line sits ~0.5 m ahead of a robot standing at the
-      # line's side -- past the arm's 0.45 m -- so when the middle is out of reach, Pick falls
-      # back to these. Tried after the middle ones with the same tilt.
       grasps:
         - "edge_high_a  0.000 -0.050 -0.060  1.5708 0.0 2.3562"
         - "edge_high_b  0.000 -0.050 -0.060  1.5708 0.0 0.7854"
-        - "edge_near_a  0.120 -0.050 -0.060  1.5708 0.0 2.3562"
-        - "edge_near_b -0.120 -0.050 -0.060  1.5708 0.0 0.7854"
 
     # Shared by every object.
     tracking:
