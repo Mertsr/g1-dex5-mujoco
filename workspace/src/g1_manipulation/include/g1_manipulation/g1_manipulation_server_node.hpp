@@ -200,6 +200,7 @@ private:
     // Object grasps published with the object pose (see handGoalFromGrasp).
     double grasp_approach_m_{ 0.12 };  ///< straight-line approach and retreat length
     double linear_min_fraction_{ 0.95 };
+    double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;

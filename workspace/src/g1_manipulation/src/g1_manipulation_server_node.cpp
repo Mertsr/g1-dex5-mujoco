@@ -132,6 +132,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // For objects that publish their own grasp ("<object>/grasp/<name>" on /objects): the hand
     // goes to a point this far back along the grasp's approach axis, then straight in.
     grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.12);
+    locate_timeout_s_    = declare_parameter<double>("locate_timeout_s", 3.0);
     linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -382,13 +383,12 @@ G1ManipulationServer::lookUpObject(const std::string& object_id)
     // arm to a grasp knows how old a pose is too old. g1_object_pose_source deliberately
     // forwards the sample's own stamp so this check means something.
     const double age = (now() - rclcpp::Time(snapshot.header.stamp)).seconds();
-    if (snapshot.detections.empty() || age > object_timeout_s_)
+    if (age > object_timeout_s_)
     {
         RCLCPP_ERROR(
             get_logger(),
-            "No usable object poses: %zu known, newest %.2f s old (limit %.2f). Is "
-            "g1_object_pose_source active?",
-            snapshot.detections.size(),
+            "No usable object poses: newest %.2f s old (limit %.2f). Is g1_object_pose_source "
+            "active, and is its source publishing?",
             age,
             object_timeout_s_);
         return std::nullopt;
@@ -401,7 +401,22 @@ G1ManipulationServer::lookUpObject(const std::string& object_id)
             return detection;
         }
     }
-    RCLCPP_ERROR(get_logger(), "No object called '%s' is being reported", object_id.c_str());
+    // Fresh, but without it: a measuring source (the depth tracker) reports only what it is
+    // tracking right now. Say what IS there, which is usually the answer.
+    std::string seen;
+    for (const vision_msgs::msg::Detection3D& detection : snapshot.detections)
+    {
+        if (!detection.results.empty())
+        {
+            seen += (seen.empty() ? "" : ", ") + detection.results.front().hypothesis.class_id;
+        }
+    }
+    RCLCPP_ERROR(
+        get_logger(),
+        "No object called '%s' is being reported right now (reported: %s). With the depth "
+        "tracker, the part has to be in the head camera's view and tracked.",
+        object_id.c_str(),
+        seen.empty() ? "nothing" : seen.c_str());
     return std::nullopt;
 }
 
@@ -591,10 +606,19 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     feedback->phase = Pick::Feedback::PHASE_LOCATING;
     goal_handle->publish_feedback(feedback);
-    const auto detection = lookUpObject(goal->object_id);
+    // Waited for, briefly: a tracked part can be between frames, or still being searched for
+    // the moment the robot has turned to it.
+    auto detection = lookUpObject(goal->object_id);
+    const auto locate_deadline = now() + rclcpp::Duration::from_seconds(locate_timeout_s_);
+    while (!detection && now() < locate_deadline && rclcpp::ok())
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        detection = lookUpObject(goal->object_id);
+    }
     if (!detection)
     {
-        abort_locating("no fresh pose for '" + goal->object_id + "'");
+        abort_locating("no fresh pose for '" + goal->object_id + "' within " +
+                       std::to_string(locate_timeout_s_) + " s");
         return;
     }
     // /objects is in odom and the planner works in pelvis; the two differ by wherever the
