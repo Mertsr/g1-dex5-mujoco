@@ -83,6 +83,9 @@ private:
     /// "<object>/grasp/<name>" and "<object>/slot/<name>", so they travel through /objects with
     /// the object's own pose and stamp.
     std::vector<std::vector<FramedPose>> grasps_, slots_;
+    /// Per object, the last verified pose (world frame), reported through rejected frames while
+    /// the object is still being tracked.
+    std::vector<std::optional<Eigen::Isometry3f>> last_verified_;
     std::vector<std::string> mesh_urls_;    ///< per object, for RViz mesh markers
     std::vector<double>      mesh_scales_;
     rclcpp::Time                                                       last_status_{ 0, 0, RCL_ROS_TIME };

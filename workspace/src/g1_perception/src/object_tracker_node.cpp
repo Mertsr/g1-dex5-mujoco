@@ -90,6 +90,7 @@ ObjectTrackerNode::ObjectTrackerNode(const rclcpp::NodeOptions& options)
 
     const auto t0 = std::chrono::steady_clock::now();
     multi_        = std::make_unique<MultiTracker>(readObjects());
+    last_verified_.resize(multi_->size());
     for (std::size_t i = 0; i < multi_->size(); ++i)
     {
         const auto& c = multi_->config(i);
@@ -388,17 +389,36 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
         {
             ++valid_frames_[r.name];
         }
-        if (!r.valid)
+        // A frame the tracker rejects while still tracking (a hand over the part, a fit that
+        // missed once) keeps reporting the last verified pose, held fixed in the world frame,
+        // with score 0. Dropping the part from /objects for one frame made it blink in and out
+        // for everything downstream; it leaves only when the tracker gives up and searches.
+        Eigen::Isometry3f world_T_output, cam_T_output;
+        float             score = r.out.score.coverage;
+        if (r.valid)
         {
+            world_T_output = r.world_T_output;
+            cam_T_output   = r.cam_T_output;
+            last_verified_[oi] = world_T_output;
+        }
+        else if (r.out.state == ObjectTracker::State::kTracking && last_verified_[oi])
+        {
+            world_T_output = *last_verified_[oi];
+            cam_T_output   = world_T_cam->inverse() * world_T_output;
+            score          = 0.0f;
+        }
+        else
+        {
+            last_verified_[oi].reset();
             continue;
         }
-        const Eigen::Isometry3f pose = out_T_cam * r.cam_T_output;
+        const Eigen::Isometry3f pose = out_T_cam * cam_T_output;
         vision_msgs::msg::Detection3D d;
         d.header = array.header;
         d.id     = r.name;
         vision_msgs::msg::ObjectHypothesisWithPose h;
         h.hypothesis.class_id = r.name;
-        h.hypothesis.score    = r.out.score.coverage;
+        h.hypothesis.score    = score;
         h.pose.pose           = toPose(pose);
         d.results.push_back(h);
         // Grasps and slots ride on the same detection, after the object's own pose, so a consumer
@@ -410,7 +430,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
             {
                 vision_msgs::msg::ObjectHypothesisWithPose extra;
                 extra.hypothesis.class_id = r.name + "/" + kind + "/" + g.frame;
-                extra.hypothesis.score    = r.out.score.coverage;
+                extra.hypothesis.score    = score;
                 extra.pose.pose           = toPose(pose * g.pose);
                 d.results.push_back(extra);
                 if (tf_broadcaster_)
@@ -419,7 +439,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
                     t.header.stamp    = msg->header.stamp;
                     t.header.frame_id = world_frame_;
                     t.child_frame_id  = "tracked/" + extra.hypothesis.class_id;
-                    t.transform       = toTransform(r.world_T_output * g.pose);
+                    t.transform       = toTransform(world_T_output * g.pose);
                     tf_broadcaster_->sendTransform(t);
                 }
             }
@@ -438,7 +458,7 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
             t.header.stamp    = msg->header.stamp;
             t.header.frame_id = world_frame_;
             t.child_frame_id  = "tracked/" + r.name;
-            t.transform       = toTransform(r.world_T_output);
+            t.transform       = toTransform(world_T_output);
             tf_broadcaster_->sendTransform(t);
         }
     }
