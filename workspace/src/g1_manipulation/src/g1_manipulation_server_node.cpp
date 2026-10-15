@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -742,14 +743,30 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             reached = true;
             break;
         }
-        tried += (tried.empty() ? "" : ", ") + c.name + " (" + arm_name + ")";
+        // Why not: out of the arm's reach altogether (no IK solution, collisions ignored), or
+        // reachable but blocked -- in collision with the octomap or the object, or no path. The
+        // two need opposite fixes: stand somewhere else, or change the approach.
+        arm_group->setStartStateToCurrentState();
+        const bool has_ik = arm_group->setJointValueTarget(pregrasp_goal, arm.grasp_frame);
+        arm_group->clearPoseTargets();
+        char where[200];
+        std::snprintf(where, sizeof where, "grasp at pelvis (%.2f, %.2f, %.2f) m, pregrasp at (%.2f, %.2f, %.2f)",
+                      grasp_goal.position.x, grasp_goal.position.y, grasp_goal.position.z,
+                      pregrasp_goal.position.x, pregrasp_goal.position.y, pregrasp_goal.position.z);
+        RCLCPP_WARN(get_logger(), "pick %s: %s with the %s hand: %s; %s", goal->object_id.c_str(), c.name.c_str(),
+                    arm_name.c_str(), has_ik ? "the arm CAN reach it, but the plan was blocked (collision or no path)"
+                                             : "OUT OF REACH (no IK solution even ignoring collisions)",
+                    where);
+        tried += (tried.empty() ? "" : "; ") + c.name + " (" + arm_name + ", " +
+                 (has_ik ? "reachable but blocked" : "out of reach") + ", " + where + ")";
     }
     if (!reached)
     {
         fail(Pick::Feedback::PHASE_PREGRASP,
              "could not reach the pregrasp of any grasp: " + tried +
-                 ". Stand so the grasp point is 0.25-0.45 m ahead of the pelvis and within 0.35 m "
-                 "to the side of it.");
+                 ". Out of reach: stand so the grasp point is 0.25-0.45 m ahead of the pelvis (x) "
+                 "and within 0.35 m to the side (|y|). Blocked: the open hand at the pregrasp hits "
+                 "the octomap or the part's box.");
         return;
     }
 
