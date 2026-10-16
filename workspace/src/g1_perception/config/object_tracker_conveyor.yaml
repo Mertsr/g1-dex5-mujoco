@@ -17,8 +17,10 @@ g1_object_tracker:
     world_frame: odom
     # What g1_object_pose_source's depth_tracker source expects detections in.
     output_frame: camera_color_optical_frame
-    # tracked/<name> frames under world_frame, for RViz.
-    publish_tf: true
+    # tracked/<name> frames under world_frame, for RViz. Off: a part that stops being tracked
+    # leaves frames that go stale, and move_group's planning scene monitor warns about every one
+    # of them on each update. The debug markers (~/debug/markers) show the same poses.
+    publish_tf: false
 
     # Fitted in this order, and each one's surface is removed from the depth before the next
     # is fitted: the pallet first, so a panel seated in a nest with 2 mm clearance is not
