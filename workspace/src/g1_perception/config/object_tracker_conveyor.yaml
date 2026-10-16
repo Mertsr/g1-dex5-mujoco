@@ -40,6 +40,11 @@ g1_object_tracker:
       prior_sweep: "x 0.0 0.75 0.025"
       # Reported pose = model pose * this. The sim body frame IS this model's frame.
       output_offset: "0 0 0"
+      # Where the pallet can be: on its line, anywhere along its travel, level and square to it
+      # (5 degrees). A fit anywhere else -- the tray, the floor, a rail -- is dropped and the
+      # pallet searched for again, never reported. Same caveat as the prior: odom here is the
+      # simulator's; on the robot write it in map.
+      region: "odom 0.10 1.00 0.57 0.63 0.74 0.79 5"
       # Where a panel's BODY frame sits when seated in each nest, in the pallet's frame. Published
       # as pallet/slot/nest_<k> on /objects; Place with surface_object_id "pallet/slot/nest_2"
       # puts the held panel exactly there. Same measurement as the panel's nest priors below,
@@ -53,6 +58,10 @@ g1_object_tracker:
     panel:
       model: package://g1_perception/models/bsh_panel.stl
       model_scale: 1.0
+      # Up to this many panels at once, reported as panel_1 .. panel_4 (one model, loaded once).
+      # Each takes whichever prior below verifies and no other instance holds. Pick with
+      # object_id "panel" takes the nearest one; "panel_3" a particular one.
+      instances: 4
       # The four nests, relative to the tracked pallet: wherever the pallet is, a panel seated in
       # nest k is here. Measured from the simulator with the panel settled in nest 1, then
       # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
@@ -61,8 +70,8 @@ g1_object_tracker:
       # Then the tray beside the line (the scene's part_tray_1..4, in odom), AS THEY REST: on a
       # flat tray a panel tips 15.8 degrees onto its clips and drops 23 mm, which put the
       # as-authored poses outside what a prior search can pull in. Measured by settling the scene.
-      # Several priors in view at once is fine: the search keeps the one the depth confirms best,
-      # and one panel is tracked at a time.
+      # Several priors in view at once is fine: each instance keeps the one the depth confirms
+      # best among those no other instance holds.
       priors:
         - "odom 1.6397 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
         - "odom 1.7897 -0.8005 0.7910 -1.2955 0.0057 -1.5589"

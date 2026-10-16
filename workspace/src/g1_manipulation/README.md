@@ -87,7 +87,8 @@ result:
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the
   retreat are straight lines along the grasp's approach.
 
-`arm: auto` picks with the hand on the grasp point's side of the pelvis first, then the other hand, and
+`object_id: panel` with the tracker reporting `panel_1` .. `panel_4` takes the one nearest the
+pelvis; `panel_3` takes that one. `arm: auto` picks with the hand on the grasp point's side of the pelvis first, then the other hand, and
 places with the hand that picked.
 
 ```bash

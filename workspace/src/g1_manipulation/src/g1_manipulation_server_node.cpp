@@ -460,6 +460,45 @@ G1ManipulationServer::lookUpObject(const std::string& object_id)
             return detection;
         }
     }
+    // Several of one part are reported as <id>_1, <id>_2, ... (the tracker's `instances`): asked
+    // for <id>, take the one nearest the pelvis, which is the one the arm is likeliest to reach.
+    {
+        std::optional<vision_msgs::msg::Detection3D> nearest;
+        double                                       best = 1e9;
+        const std::string                            prefix = object_id + "_";
+        for (const vision_msgs::msg::Detection3D& detection : snapshot.detections)
+        {
+            if (detection.results.empty())
+            {
+                continue;
+            }
+            const std::string& id = detection.results.front().hypothesis.class_id;
+            if (id.size() <= prefix.size() || id.rfind(prefix, 0) != 0 ||
+                id.find_first_not_of("0123456789", prefix.size()) != std::string::npos)
+            {
+                continue;
+            }
+            const std::string frame = detection.header.frame_id.empty() ? snapshot.header.frame_id
+                                                                        : detection.header.frame_id;
+            const auto pose = toPlanningFrame(detection.results.front().pose.pose, frame);
+            if (!pose)
+            {
+                continue;
+            }
+            const double d = std::hypot(pose->position.x, pose->position.y);
+            if (d < best)
+            {
+                best    = d;
+                nearest = detection;
+            }
+        }
+        if (nearest)
+        {
+            RCLCPP_INFO(get_logger(), "'%s': taking %s, %.2f m from the pelvis", object_id.c_str(),
+                        nearest->results.front().hypothesis.class_id.c_str(), best);
+            return nearest;
+        }
+    }
     // Fresh, but without it: a measuring source (the depth tracker) reports only what it is
     // tracking right now. Say what IS there, which is usually the answer.
     std::string seen;
@@ -680,6 +719,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                        std::to_string(locate_timeout_s_) + " s");
         return;
     }
+    // The instance actually being picked ("panel_2" when asked for "panel"): what the grasps,
+    // the collision object and the attachment are named after from here on.
+    const std::string object_id = detection->results.front().hypothesis.class_id;
     // /objects is in odom and the planner works in pelvis; the two differ by wherever the
     // robot is standing, so every measured pose goes through TF before it is planned against.
     const std::string object_frame =
@@ -701,7 +743,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::vector<Candidate> candidates;
     for (const auto& r : detection->results)
     {
-        if (r.hypothesis.class_id.rfind(goal->object_id + "/grasp/", 0) != 0)
+        if (r.hypothesis.class_id.rfind(object_id + "/grasp/", 0) != 0)
         {
             continue;
         }
@@ -807,7 +849,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
     }
     RCLCPP_INFO(get_logger(), "pick %s: %zu reachable grasp poses out of %d IK checks",
-                goal->object_id.c_str(), attempts.size(), ik_checked);
+                object_id.c_str(), attempts.size(), ik_checked);
 
     // Filled for whichever attempt's pregrasp is planned to.
     ArmContext                              arm;
@@ -827,8 +869,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
         if (arm_group)
         {
-            arm_group->detachObject(goal->object_id);
-            allowHandContact(arm, { "<octomap>", goal->object_id }, false);
+            arm_group->detachObject(object_id);
+            allowHandContact(arm, { "<octomap>", object_id }, false);
         }
         result->success = false;
         result->message = phase + ": " + why;
@@ -866,7 +908,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         grasp_pose    = at.grasp_pose;
         grasp_goal    = at.grasp;
         pregrasp_goal = at.pregrasp;
-        RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", goal->object_id.c_str(),
+        RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", object_id.c_str(),
                     at.label.c_str(), arm_name.c_str());
 
         // Opened before the approach, not after: closing on the way in would knock the object
@@ -885,7 +927,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // IK said reachable, so this one is blocked: the open hand or the arm on the way hits the
         // octomap or the part's box, or no path was found in time.
         RCLCPP_WARN(get_logger(), "pick %s: %s with the %s hand is reachable but the plan was blocked",
-                    goal->object_id.c_str(), at.label.c_str(), arm_name.c_str());
+                    object_id.c_str(), at.label.c_str(), arm_name.c_str());
         tried += (tried.empty() ? "" : "; ") + at.label + " (" + arm_name + ")";
     }
     if (!reached)
@@ -915,7 +957,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // is also what gets PointCloudOctomapUpdater's ShapeMask to stop feeding it back into the
     // octomap -- world collision objects get no such filtering, attached bodies do.
     allowHandContact(arm, { "<octomap>" }, true);
-    planning_scene_.removeCollisionObjects({ goal->object_id });
+    planning_scene_.removeCollisionObjects({ object_id });
 
     // Straight in for a published grasp: the parts beside it are close, and a free-space plan
     // may swing the fingers through them.
@@ -967,7 +1009,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // the octomap from before the grasp -- the ShapeMask stops new clouds re-adding it, but it
     // does not erase what is already there. Without this exemption the lift starts with the
     // attached cube already in collision against the table it is still sitting on.
-    allowHandContact(arm, { "<octomap>", goal->object_id }, true);
+    allowHandContact(arm, { "<octomap>", object_id }, true);
 
     feedback->phase = Pick::Feedback::PHASE_LIFT;
     goal_handle->publish_feedback(feedback);
@@ -980,7 +1022,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         return;
     }
 
-    allowHandContact(arm, { "<octomap>", goal->object_id }, false);
+    allowHandContact(arm, { "<octomap>", object_id }, false);
     // How it is held, so a place can put the OBJECT at a pose: grasp_frame_T_object, from the
     // grasp the hand was sent to and the object pose it was planned against.
     {
@@ -988,11 +1030,11 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         tf2::fromMsg(grasp_goal, world_T_grasp);
         tf2::fromMsg(*object_pose, world_T_object);
         std::lock_guard<std::mutex> lock(held_mutex_);
-        held_grasp_[goal->object_id] = world_T_grasp.inverse() * world_T_object;
-        held_arm_[goal->object_id]   = arm_name;
+        held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
+        held_arm_[object_id]   = arm_name;
     }
     result->success = true;
-    result->message = "picked " + goal->object_id + " with the " + arm_name + " hand";
+    result->message = "picked " + object_id + " with the " + arm_name + " hand";
     goal_handle->succeed(result);
 }
 

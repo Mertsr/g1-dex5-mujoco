@@ -174,10 +174,9 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
         }
         c.model.scale = static_cast<float>(declare_parameter<double>(name + ".model_scale", 1.0));
         // RViz resolves package:// itself; anything else it needs as an absolute file:// URL.
-        mesh_urls_.push_back(model_param.rfind("package://", 0) == 0
-                                 ? model_param
-                                 : "file://" + std::filesystem::absolute(c.model_path).string());
-        mesh_scales_.push_back(c.model.scale);
+        const std::string mesh_url = model_param.rfind("package://", 0) == 0
+                                         ? model_param
+                                         : "file://" + std::filesystem::absolute(c.model_path).string();
         c.params.global_fallback = declare_parameter<bool>(name + ".global_fallback", true);
 
         std::string error;
@@ -237,13 +236,33 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
             }
             return out_poses;
         };
-        grasps_.push_back(named("grasps"));
-        slots_.push_back(named("slots"));
+        const auto grasps = named("grasps");
+        const auto slots  = named("slots");
         if (c.priors.empty() && !c.params.global_fallback)
         {
             throw std::runtime_error("object '" + name + "' has neither priors nor global_fallback: it can never be found");
         }
-        out.push_back(std::move(c));
+        const auto region = declare_parameter<std::string>(name + ".region", "");
+        if (!region.empty())
+        {
+            c.region = parseRegion(region, error);
+            if (!c.region)
+            {
+                throw std::runtime_error(name + ".region: " + error);
+            }
+        }
+        c.instance_separation =
+            static_cast<float>(declare_parameter<double>(name + ".instance_separation", c.instance_separation));
+        // Several of the same part at once: <name>_1 .. <name>_N, sharing one model.
+        const int instances = static_cast<int>(declare_parameter<int>(name + ".instances", 1));
+        for (auto& inst : expandInstances(c, instances))
+        {
+            mesh_urls_.push_back(mesh_url);
+            mesh_scales_.push_back(inst.model.scale);
+            grasps_.push_back(grasps);
+            slots_.push_back(slots);
+            out.push_back(std::move(inst));
+        }
     }
     return out;
 }
@@ -380,6 +399,13 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
                         "%s: lost, searching again (last fit: ratio %.2f, coverage %.2f, violation %.2f, %d points)",
                         r.name.c_str(), r.out.score.ratio, r.out.score.coverage, r.out.score.violation,
                         r.out.scene_points);
+        }
+        if (r.rejected)
+        {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "%s: dropped a fit outside its region or on another instance's part "
+                                 "(ratio %.2f, coverage %.2f); searching again",
+                                 r.name.c_str(), r.out.score.ratio, r.out.score.coverage);
         }
         if (r.valid && r.out.start_used > 0)
         {

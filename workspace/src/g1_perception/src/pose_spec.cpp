@@ -123,4 +123,57 @@ std::optional<std::vector<Eigen::Isometry3f>> parseSweep(const std::string& text
     return out;
 }
 
+bool Region::contains(const Eigen::Isometry3f& frame_T_pose) const
+{
+    if (!box.contains(frame_T_pose.translation()))
+    {
+        return false;
+    }
+    if (max_angle < 0.0f)
+    {
+        return true;
+    }
+    const Eigen::Matrix3f diff = orientation.transpose() * frame_T_pose.linear();
+    return Eigen::AngleAxisf(diff).angle() <= max_angle;
+}
+
+std::optional<Region> parseRegion(const std::string& text, std::string& error)
+{
+    const auto t = tokens(text);
+    if (t.size() != 7 && t.size() != 8 && t.size() != 11)
+    {
+        error = "'" + text + "': expected <frame> xmin xmax ymin ymax zmin zmax [max_angle_deg [roll pitch yaw]]";
+        return std::nullopt;
+    }
+    float v[10] = {};
+    for (std::size_t i = 1; i < t.size(); ++i)
+    {
+        if (!toFloat(t[i], v[i - 1]))
+        {
+            error = "'" + text + "': '" + t[i] + "' is not a number";
+            return std::nullopt;
+        }
+    }
+    Region r;
+    r.frame = t[0];
+    for (int a = 0; a < 3; ++a)
+    {
+        if (v[2 * a] > v[2 * a + 1])
+        {
+            error = "'" + text + "': a minimum is above its maximum";
+            return std::nullopt;
+        }
+    }
+    r.box = Eigen::AlignedBox3f(Eigen::Vector3f(v[0], v[2], v[4]), Eigen::Vector3f(v[1], v[3], v[5]));
+    if (t.size() >= 8)
+    {
+        r.max_angle = v[6] * static_cast<float>(M_PI) / 180.0f;
+    }
+    if (t.size() == 11)
+    {
+        r.orientation = poseFromXyzRpy(0, 0, 0, v[7], v[8], v[9]).linear();
+    }
+    return r;
+}
+
 }  // namespace g1_perception

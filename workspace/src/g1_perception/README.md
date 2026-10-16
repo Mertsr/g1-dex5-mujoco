@@ -129,6 +129,14 @@ See `config/object_tracker_conveyor.yaml`. Poses are one string each:
 TF frame or another tracked object's name. `prior_sweep: "x 0.0 0.75 0.025"` tries a prior
 every 25 mm along an axis.
 
+Per object, besides the model, priors and offsets:
+
+| Key | What |
+| --- | --- |
+| `instances: N` | Track up to N of this part at once, as `<name>_1` .. `<name>_N`, sharing one loaded model. Pick with `object_id: <name>` takes the nearest. |
+| `region: "<frame> xmin xmax ymin ymax zmin zmax [max_angle_deg [roll pitch yaw]]"` | Where the object can be. A fit outside it is dropped and the object searched for again, never reported. The pallet's keeps it on its line. |
+| `instance_separation` | How close two instances' poses may be (default 0.05 m). |
+
 **Swapping in scanned models.** Set `<object>.model` to the PLY, with `model_scale: 0.001` if it
 is in millimetres. PLY with faces is best, because normals then come from the faces and
 back-face rejection works. A point-only PLY works too. The priors and `output_offset` are
@@ -153,9 +161,10 @@ The easiest way is to let the tracker lock once from a hand-placed prior, then r
   across that direction all face away from the camera can settle up to about a centimetre off,
   and still pass verification. On the line's views this did not happen, but a camera looking
   straight along a part's length would show it.
-- **One instance per configured object.** `panel` follows one panel: the first prior that
-  verifies, so nest 1 before nest 2. To follow several at once, configure `panel_1`, `panel_2`,
-  and so on, each with its own nest prior; each loads its own copy of the model.
+- **Instances share priors, not tracks.** `instances: 4` reports `panel_1` .. `panel_4`. An
+  instance does not search a prior another one already holds, and a fit within
+  `instance_separation` (5 cm) of another instance's part is dropped. With more parts in view than
+  instances, the rest are not reported.
 - **Mirror-symmetric placements are told apart only by asymmetric features.** On the panel these
   are its windows and clips; a panel flipped 180° in a nest is a separate prior.
 

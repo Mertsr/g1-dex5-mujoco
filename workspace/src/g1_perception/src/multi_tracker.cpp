@@ -7,6 +7,23 @@
 namespace g1_perception
 {
 
+std::vector<ObjectConfig> expandInstances(const ObjectConfig& c, int n)
+{
+    if (n <= 1)
+    {
+        return { c };
+    }
+    std::vector<ObjectConfig> out;
+    for (int i = 1; i <= n; ++i)
+    {
+        ObjectConfig copy = c;
+        copy.name         = c.name + "_" + std::to_string(i);
+        copy.group        = c.group.empty() ? c.name : c.group;
+        out.push_back(std::move(copy));
+    }
+    return out;
+}
+
 MultiTracker::MultiTracker(std::vector<ObjectConfig> objects)
 {
     std::set<std::string> names;
@@ -17,6 +34,7 @@ MultiTracker::MultiTracker(std::vector<ObjectConfig> objects)
             throw std::runtime_error("object names must be non-empty and unique ('" + c.name + "')");
         }
     }
+    std::map<std::string, std::shared_ptr<const ObjectModel>> models;
     for (auto& c : objects)
     {
         for (const auto& p : c.priors)
@@ -27,10 +45,18 @@ MultiTracker::MultiTracker(std::vector<ObjectConfig> objects)
             }
         }
         Object o;
+        // Instances of one part load it once.
+        const std::string key = c.model_path + "|" + std::to_string(c.model.scale) + "|" +
+                                std::to_string(c.model.voxel) + "|" + std::to_string(c.model.grid_cell);
         std::shared_ptr<const ObjectModel> model;
         try
         {
-            model = ObjectModel::load(c.model_path, c.model);
+            auto& cached = models[key];
+            if (!cached)
+            {
+                cached = ObjectModel::load(c.model_path, c.model);
+            }
+            model = cached;
         }
         catch (const std::exception& e)
         {
@@ -46,6 +72,7 @@ MultiTracker::MultiTracker(std::vector<ObjectConfig> objects)
         o.box_centre = box.center();
         o.box_size   = box.sizes();
         o.tracker    = std::make_unique<ObjectTracker>(c.name, model, c.params);
+        o.group      = c.group.empty() ? c.name : c.group;
         o.config     = std::move(c);
         objects_.push_back(std::move(o));
     }
@@ -94,6 +121,19 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
         return it->second;
     };
 
+    // Another instance of the same part already at (within `sep` of) this world position.
+    const auto held_by_sibling = [&](const Object& self, const Eigen::Vector3f& world_p) {
+        for (const auto& other : objects_)
+        {
+            if (&other != &self && other.group == self.group && other.world_T_model &&
+                (other.world_T_model->translation() - world_p).norm() < self.config.instance_separation)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
     std::vector<Result> results;
     results.reserve(objects_.size());
     for (auto& o : objects_)
@@ -133,7 +173,11 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
             {
                 if (const auto parent = world_T(p.frame))
                 {
-                    ctx.priors.push_back(cam_T_world * *parent * p.pose);
+                    const Eigen::Isometry3f world_T_prior = *parent * p.pose;
+                    if (!held_by_sibling(o, world_T_prior.translation()))
+                    {
+                        ctx.priors.push_back(cam_T_world * world_T_prior);
+                    }
                 }
             }
         }
@@ -141,6 +185,26 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
         Result r;
         r.name         = o.config.name;
         r.out          = o.tracker->update(depth, k, ctx);
+        if (r.out.state == ObjectTracker::State::kTracking && r.out.valid)
+        {
+            // A fit the depth confirms can still be the wrong thing: another instance's part, or
+            // a look-alike where this object cannot be. Either way it is dropped and searched
+            // for again, rather than reported.
+            const Eigen::Isometry3f world_T_fit = world_T_cam * r.out.cam_T_model;
+            bool                    ok          = !held_by_sibling(o, world_T_fit.translation());
+            if (ok && o.config.region)
+            {
+                const auto parent = world_T(o.config.region->frame);
+                ok = parent && o.config.region->contains(parent->inverse() * world_T_fit * o.config.model_T_output);
+            }
+            if (!ok)
+            {
+                o.tracker->reset();
+                r.out.valid = false;
+                r.out.state = ObjectTracker::State::kSearching;
+                r.rejected  = true;
+            }
+        }
         const bool tracking = r.out.state == ObjectTracker::State::kTracking;
         r.valid        = tracking && r.out.valid;
         r.box_centre   = o.box_centre;

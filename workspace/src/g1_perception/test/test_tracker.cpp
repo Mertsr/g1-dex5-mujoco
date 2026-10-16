@@ -367,3 +367,95 @@ TEST_F(Tracker, DebugViewMarksTheFitAndItsVerdicts)
     }
     EXPECT_GT(painted, 500);
 }
+
+TEST(PoseSpec, ParsesRegions)
+{
+    std::string err;
+    const auto  r = parseRegion("odom 0.1 1.0 0.55 0.65 0.74 0.78 5", err);
+    ASSERT_TRUE(r) << err;
+    EXPECT_EQ(r->frame, "odom");
+    EXPECT_TRUE(r->contains(poseFromXyzRpy(0.5f, 0.6f, 0.76f, 0, 0, 0.05f)));
+    EXPECT_FALSE(r->contains(poseFromXyzRpy(0.5f, 0.6f, 0.76f, 0, 0, 0.2f)));  // turned 11 degrees
+    EXPECT_FALSE(r->contains(poseFromXyzRpy(0.5f, 0.6f, 0.30f, 0, 0, 0)));     // on the floor
+    EXPECT_FALSE(parseRegion("odom 1 0 0 1 0 1", err));                          // min above max
+    EXPECT_FALSE(parseRegion("odom 0 1 0 1 0", err));
+}
+
+namespace
+{
+// Polls a MultiTracker on one image until `done` or 100 frames.
+std::vector<MultiTracker::Result> run(MultiTracker& mt, const DepthImage& d, const Intrinsics& k,
+                                      const std::function<bool(const std::vector<MultiTracker::Result>&)>& done)
+{
+    const auto lookup = [](const std::string&, double) -> std::optional<Eigen::Isometry3f> {
+        return Eigen::Isometry3f::Identity();
+    };
+    std::vector<MultiTracker::Result> r;
+    for (int f = 0; f < 100; ++f)
+    {
+        r = mt.update(d, k, f / 30.0, Eigen::Isometry3f::Identity(), "camera", lookup);
+        if (done(r))
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return r;
+}
+}  // namespace
+
+TEST_F(Tracker, AFitOutsideTheRegionIsNeverReported)
+{
+    ObjectConfig c;
+    c.name       = "part";
+    c.model_path = ::testing::TempDir() + "g1_perception_part.stl";
+    c.params.global_fallback = false;
+    c.priors.push_back({ "camera", truePose() });
+    std::string err;
+    // World = camera; the part is 0.5 m in front of it, the region 1 m.
+    c.region = parseRegion("camera -1 1 -1 1 0.9 1.1", err);
+    MultiTracker mt({ c });
+    bool         rejected = false;
+    const auto   r        = run(mt, view(depth_, k_), k_, [&](const auto& res) {
+        rejected = rejected || res[0].rejected;
+        EXPECT_FALSE(res[0].valid);
+        return false;
+    });
+    EXPECT_TRUE(rejected);
+
+    c.region = parseRegion("camera -1 1 -1 1 0.3 0.7", err);
+    MultiTracker mt2({ c });
+    const auto   r2 = run(mt2, view(depth_, k_), k_, [](const auto& res) { return res[0].valid; });
+    EXPECT_TRUE(r2[0].valid);
+}
+
+TEST_F(Tracker, InstancesTakeDifferentParts)
+{
+    // A second part beside the first, both in view.
+    const Eigen::Isometry3f beside = poseFromXyzRpy(0.0f, 0.15f, 0.0f, 0, 0, 0);
+    std::vector<Tri>        both   = tris_;
+    for (const auto& t : tris_)
+    {
+        both.push_back({ beside * t[0], beside * t[1], beside * t[2] });
+    }
+    const auto depth = render(both, truePose(), k_);
+
+    ObjectConfig c;
+    c.name       = "part";
+    c.model_path = ::testing::TempDir() + "g1_perception_part.stl";
+    c.params.global_fallback = false;
+    // Both priors on both instances, the first part's listed first: without the instance rules
+    // both would take it.
+    c.priors.push_back({ "camera", truePose() });
+    c.priors.push_back({ "camera", truePose() * beside });
+    const auto configs = expandInstances(c, 2);
+    ASSERT_EQ(configs.size(), 2u);
+    EXPECT_EQ(configs[1].name, "part_2");
+    MultiTracker mt(configs);
+    const auto   r = run(mt, view(depth, k_), k_, [](const auto& res) { return res[0].valid && res[1].valid; });
+    ASSERT_TRUE(r[0].valid);
+    ASSERT_TRUE(r[1].valid);
+    const double apart = (r[0].world_T_output.translation() - r[1].world_T_output.translation()).norm();
+    EXPECT_NEAR(apart, 0.15, 0.003);
+    EXPECT_EQ(&mt.model(0), &mt.model(1));  // loaded once
+}

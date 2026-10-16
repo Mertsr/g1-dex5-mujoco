@@ -45,7 +45,19 @@ struct ObjectConfig
     /// of the stack calls this object's (its simulator body frame, a grasp frame), which need
     /// not be the frame its scan or CAD file happens to be authored in.
     Eigen::Isometry3f model_T_output = Eigen::Isometry3f::Identity();
+    /// A reported pose outside this is rejected, and the object searched for again.
+    std::optional<Region> region;
+    /// Instances of one part (see expandInstances) share a group: no two of them are reported
+    /// within `instance_separation` of each other, and a prior one of them already holds is not
+    /// searched by the others. Empty: the object's own name.
+    std::string group;
+    float       instance_separation = 0.05f;
 };
+
+/// `n` copies of `c` named <name>_1 .. <name>_n, one group: several of the same part at once,
+/// each free to lock onto any of the priors. The model is loaded once and shared. n <= 1 returns
+/// `c` unchanged.
+std::vector<ObjectConfig> expandInstances(const ObjectConfig& c, int n);
 
 class MultiTracker
 {
@@ -65,6 +77,9 @@ public:
         Eigen::Vector3f        box_size   = Eigen::Vector3f::Zero();
         bool                   just_locked = false;
         bool                   just_lost   = false;
+        /// The depth confirmed a fit, but it was outside the object's region or on another
+        /// instance's part: dropped, and searched for again.
+        bool                   rejected    = false;
         /// Debug only, while searching: every pose the prior search tries (priors x offsets),
         /// camera frame.
         std::vector<Eigen::Isometry3f> hypotheses;
@@ -99,6 +114,7 @@ private:
         std::optional<Eigen::Isometry3f> world_T_model;  ///< last verified
         Eigen::Vector3f                  box_centre, box_size;
         bool                             was_tracking = false;
+        std::string                      group;
     };
     std::vector<Object> objects_;
     bool                debug_ = false;
