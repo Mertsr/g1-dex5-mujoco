@@ -80,6 +80,7 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 # 'none' keeps g1_navigation entirely out of the picture; the other two bring it in.
 MODES = ("none", "mapping", "localization")
@@ -291,6 +292,18 @@ def _setup(context, *args, **kwargs):
                 )
             )
         )
+        # The head depth camera as a second octomap source beside the Mid360
+        # (g1_moveit_config/config/sensors_3d.yaml): the camera sees below and ahead of the
+        # hands, where the LiDAR does not. Needs the camera, so only with sensors on.
+        if LaunchConfiguration("sensors").perform(context).lower() == "true":
+            actions.append(
+                Node(
+                    package="g1_perception",
+                    executable="g1_depth_cloud",
+                    name="g1_depth_cloud",
+                    output="log",
+                )
+            )
 
     if want_manipulation:
         # The pick/place skills and the object-pose source they read. Composed beside
@@ -308,7 +321,6 @@ def _setup(context, *args, **kwargs):
                 ),
                 launch_arguments={
                     "object_source": LaunchConfiguration("object_source"),
-                    "scene": LaunchConfiguration("world"),
                 }.items(),
             )
         )

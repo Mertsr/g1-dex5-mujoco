@@ -71,14 +71,15 @@ g1_object_tracker:
       #
       # Then the tray beside the line (the scene's part_tray_1..4, in odom), AS THEY REST: on a
       # flat tray a panel tips 15.8 degrees onto its clips and drops 23 mm, which put the
-      # as-authored poses outside what a prior search can pull in. Measured by settling the scene.
+      # as-authored poses outside what a prior search can pull in. Measured by settling the scene,
+      # then lowered 4 cm with the tray.
       # Several priors in view at once is fine: each instance keeps the one the depth confirms
       # best among those no other instance holds.
       priors:
-        - "odom 1.6397 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
-        - "odom 1.7897 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
-        - "odom 1.9397 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
-        - "odom 2.0897 -0.8005 0.7910 -1.2955 0.0057 -1.5589"
+        - "odom 1.6397 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
+        - "odom 1.7897 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
+        - "odom 1.9397 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
+        - "odom 2.0897 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
         - "pallet  0.2722 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet  0.1216 0.0 0.0614 -1.5930 -0.0006 -1.5700"
         - "pallet -0.0290 0.0 0.0614 -1.5930 -0.0006 -1.5700"

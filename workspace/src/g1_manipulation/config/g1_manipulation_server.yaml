@@ -52,34 +52,3 @@ g1_manipulation_server:
     velocity_scaling: 0.3
     planning_time_s: 10.0
     grasp_rpy: [-1.5707963, 0.0, 0.0]
-
-    # The fixed furniture of each world, as boxes: "name frame cx cy cz sx sy sz [roll pitch yaw]"
-    # (centre and FULL sizes, metres, radians). The launch sets `scene` from bringup's world:=;
-    # the boxes are added to the planning scene before every pick and place. Copied from
-    # g1_bringup/mjcf/g1_conveyor_scene.xml (MJCF sizes are half-sizes, doubled here). Legs are
-    # kept as legs rather than one block under each table: the robot stands close enough that a
-    # block would put its own legs in collision, and every plan would fail.
-    scene_obstacles:
-      conveyor:
-        - "tray_floor        odom 1.83  -0.80  0.735  0.68  0.90  0.03"
-        - "tray_wall_near    odom 1.48  -0.80  0.78   0.02  0.90  0.06"
-        - "tray_wall_y_min   odom 1.83  -1.26  0.78   0.68  0.02  0.06"
-        - "tray_wall_y_max   odom 1.83  -0.34  0.78   0.68  0.02  0.06"
-        - "tray_leg_1        odom 2.15  -1.23  0.3675 0.04  0.04  0.735"
-        - "tray_leg_2        odom 2.15  -0.37  0.3675 0.04  0.04  0.735"
-        - "tray_leg_3        odom 1.51  -1.23  0.3675 0.04  0.04  0.735"
-        - "tray_leg_4        odom 1.51  -0.37  0.3675 0.04  0.04  0.735"
-        - "conveyor_belt     odom 0.55   0.60  0.72   1.50  0.66  0.06"
-        - "conveyor_rail_n   odom 0.55   0.26  0.80   1.50  0.02  0.10"
-        - "conveyor_rail_f   odom 0.55   0.94  0.80   1.50  0.02  0.10"
-        - "conveyor_leg_n1   odom -0.15  0.26  0.345  0.06  0.06  0.69"
-        - "conveyor_leg_n2   odom -0.15  0.94  0.345  0.06  0.06  0.69"
-        - "conveyor_leg_m1   odom 0.55   0.26  0.345  0.06  0.06  0.69"
-        - "conveyor_leg_m2   odom 0.55   0.94  0.345  0.06  0.06  0.69"
-        - "conveyor_leg_f1   odom 1.25   0.26  0.345  0.06  0.06  0.69"
-        - "conveyor_leg_f2   odom 1.25   0.94  0.345  0.06  0.06  0.69"
-        - "basket            odom 1.48   0.60  0.38   0.40  0.72  0.76"
-        - "fence_x_min       odom -1.00  0.00  0.75   0.04  2.60  1.50"
-        - "fence_x_max       odom 2.20   0.00  0.75   0.04  2.60  1.50"
-        - "fence_y_min       odom 0.60  -1.30  0.75   3.20  0.04  1.50"
-        - "fence_y_max       odom 0.60   1.30  0.75   3.20  0.04  1.50"

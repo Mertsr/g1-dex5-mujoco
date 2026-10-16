@@ -39,7 +39,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
-#include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Transform.h>
 #include <vector>
 #include <vision_msgs/msg/detection3_d_array.hpp>
@@ -199,16 +198,7 @@ private:
     rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr   get_scene_;
     rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr apply_scene_;
     rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr      compute_ik_;
-    int ik_broken_code_{ 0 };
-    /// A box of the world's fixed furniture, centre and full sizes in `frame`.
-    struct StaticObstacle
-    {
-        std::string     name, frame;
-        double          cx{}, cy{}, cz{}, sx{}, sy{}, sz{};
-        tf2::Quaternion rotation{ 0, 0, 0, 1 };
-    };
-    std::vector<StaticObstacle> static_obstacles_;
-    void                        applyStaticObstacles();  ///< last /compute_ik error that was not "no solution"
+    int ik_broken_code_{ 0 };  ///< last /compute_ik error that was not "no solution"
     /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
     /// move_group's /compute_ik. Nothing if the service did not answer.
     std::optional<bool> hasIk(const std::string& group, const std::string& link,

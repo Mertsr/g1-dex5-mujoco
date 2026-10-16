@@ -81,8 +81,6 @@ def generate_launch_description():
         parameters=[
             moveit_config.to_dict(),
             os.path.join(manipulation_share, "config", "g1_manipulation_server.yaml"),
-            # Which world's fixed obstacles to add (scene_obstacles.<scene>); "" for none.
-            {"scene": LaunchConfiguration("scene")},
         ],
     )
 
@@ -112,12 +110,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "scene",
-                default_value="",
-                description="World whose fixed obstacles (scene_obstacles.<scene> in "
-                "g1_manipulation_server.yaml) go into the planning scene, e.g. conveyor.",
-            ),
             DeclareLaunchArgument(
                 "object_source",
                 default_value="sim_ground_truth",

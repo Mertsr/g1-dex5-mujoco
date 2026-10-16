@@ -50,6 +50,10 @@ ament_target_dependencies(g1_object_tracker_node PUBLIC
 add_executable(g1_object_tracker src/object_tracker_main.cpp)
 target_link_libraries(g1_object_tracker g1_object_tracker_node)
 
+# The head depth camera as a sparse cloud for MoveIt's octomap (see the file's header).
+add_executable(g1_depth_cloud src/depth_cloud_main.cpp)
+ament_target_dependencies(g1_depth_cloud rclcpp sensor_msgs)
+
 # Offline: replays a recorded or rendered sequence and grades it against ground truth.
 add_executable(icp_bench tools/icp_bench.cpp)
 target_link_libraries(icp_bench g1_perception_core)
@@ -57,7 +61,7 @@ target_link_libraries(icp_bench g1_perception_core)
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS g1_perception_core g1_object_tracker_node
   EXPORT export_${PROJECT_NAME} DESTINATION lib)
-install(TARGETS g1_object_tracker icp_bench DESTINATION lib/${PROJECT_NAME})
+install(TARGETS g1_object_tracker g1_depth_cloud icp_bench DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS tools/make_icp_dataset.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch models rviz DESTINATION share/${PROJECT_NAME})
 

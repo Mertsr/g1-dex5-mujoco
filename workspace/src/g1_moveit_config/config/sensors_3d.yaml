@@ -18,6 +18,7 @@ octomap_resolution: 0.025
 # (still an unmigrated ROS 1 page, its source begins ":moveit1:") cannot be copied.
 sensors:
   - mid360_cloud
+  - head_depth_cloud
 
 # PointCloudOctomapUpdater rather than DepthImageOctomapUpdater, and not by preference.
 # On 2.5.9 the depth-image plugin's initialize() runs before setParams()
@@ -64,3 +65,20 @@ mid360_cloud:
   # The self-filtered cloud, for seeing what the filter actually removed. Empty would simply
   # skip the publisher.
   filtered_cloud_topic: filtered_cloud
+
+# The head depth camera, converted to a sparse cloud by g1_perception's g1_depth_cloud (every 4th
+# pixel of the 424x240 depth, best effort -- the converter exists because neither MoveIt's depth
+# plugin nor depth_image_proc works here, see above). The LiDAR sits on the head too but misses
+# what is right below and ahead of the hands: a tray edge, the parts beside the one being picked.
+# The camera looks exactly there. Same self-filter as the LiDAR, so the arm is not mapped.
+head_depth_cloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /g1_depth_cloud/points
+  # The working area only; the camera's far field is the LiDAR's job.
+  max_range: 1.5
+  # Already thinned by the converter.
+  point_subsample: 1
+  padding_offset: 0.02
+  padding_scale: 1.2
+  max_update_rate: 5.0
+  filtered_cloud_topic: filtered_depth_cloud

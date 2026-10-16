@@ -96,15 +96,6 @@ ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_
 ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_2, arm: auto}" --feedback
 ```
 
-## Fixed obstacles
-
-`scene_obstacles.<world>` in `config/g1_manipulation_server.yaml` lists the world's fixed
-furniture as boxes (`"name frame cx cy cz sx sy sz [roll pitch yaw]"`, full sizes). Bringup
-passes `scene:=<world>`, and every Pick and Place first adds them to the planning scene in the
-pelvis frame as the robot stands. The LiDAR octomap only has what the head has seen; without these
-the arm planned through the tray's wall. Legs are listed as legs, not as one block under each
-table, because a block would overlap the robot's own legs and fail every plan.
-
 ## Where the hand grips
 
 Not a number in this package. `{side}_hand_grasp_frame` is a link in `g1_description`, and pose

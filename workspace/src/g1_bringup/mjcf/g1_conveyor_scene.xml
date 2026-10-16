@@ -178,22 +178,24 @@
 
          Colour: floor on tray_top_mat (light brushed steel) so the white parts read against
          it; rim walls and legs on pedestal_mat (anthracite) with the rest of the frame. -->
-    <geom name="tray_floor" group="2" type="box" size="0.34 0.45 0.015" pos="1.83 -0.80 0.735"
+    <!-- Lowered 4 cm (legs 0.735 -> 0.695 tall, floor top 0.75 -> 0.71, rim top 0.78 -> 0.74,
+         parts with it), so the hand reaches over the rim to the panels more easily. -->
+    <geom name="tray_floor" group="2" type="box" size="0.34 0.45 0.015" pos="1.83 -0.80 0.695"
       material="tray_top_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_near_x" group="2" type="box" size="0.01 0.45 0.03"
-      pos="1.48 -0.80 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.48 -0.80 0.74" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_y_min" group="2" type="box" size="0.34 0.01 0.03"
-      pos="1.83 -1.26 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.83 -1.26 0.74" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_y_max" group="2" type="box" size="0.34 0.01 0.03"
-      pos="1.83 -0.34 0.78" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="tray_leg_1" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.15 -1.23 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="tray_leg_2" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="2.15 -0.37 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="tray_leg_3" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.51 -1.23 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
-    <geom name="tray_leg_4" group="2" type="box" size="0.02 0.02 0.3675"
-      pos="1.51 -0.37 0.3675" material="pedestal_mat" contype="1" conaffinity="1"/>
+      pos="1.83 -0.34 0.74" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_1" group="2" type="box" size="0.02 0.02 0.3475"
+      pos="2.15 -1.23 0.3475" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_2" group="2" type="box" size="0.02 0.02 0.3475"
+      pos="2.15 -0.37 0.3475" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_3" group="2" type="box" size="0.02 0.02 0.3475"
+      pos="1.51 -1.23 0.3475" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_leg_4" group="2" type="box" size="0.02 0.02 0.3475"
+      pos="1.51 -0.37 0.3475" material="pedestal_mat" contype="1" conaffinity="1"/>
 
     <!-- Roller conveyor, 1.5 m long, running along world +x. The physical support surface
          (the `conveyor_belt` box) now sits with its own top at 0.75, not 0.70 -- raised to
@@ -453,7 +455,7 @@
          tray's rim (above) is the real fix for that kick travelling anywhere; this damping
          just bleeds off the kick itself faster, so parts settle rather than jostling each
          other over several seconds in a now-crowded tray. -->
-    <body name="part_tray_1" pos="1.605 -0.80 0.799" euler="-1.5708 1.57 0">
+    <body name="part_tray_1" pos="1.605 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_1_joint" damping="0.2"/>
       <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="0" conaffinity="0"/>
@@ -464,7 +466,7 @@
       <geom group="3" type="mesh" mesh="part_col_clip_2" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_tray_2" pos="1.755 -0.80 0.799" euler="-1.5708 1.57 0">
+    <body name="part_tray_2" pos="1.755 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_2_joint" damping="0.2"/>
       <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="0" conaffinity="0"/>
@@ -475,7 +477,7 @@
       <geom group="3" type="mesh" mesh="part_col_clip_2" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_tray_3" pos="1.905 -0.80 0.799" euler="-1.5708 1.57 0">
+    <body name="part_tray_3" pos="1.905 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_3_joint" damping="0.2"/>
       <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="0" conaffinity="0"/>
@@ -486,7 +488,7 @@
       <geom group="3" type="mesh" mesh="part_col_clip_2" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
     </body>
-    <body name="part_tray_4" pos="2.055 -0.80 0.799" euler="-1.5708 1.57 0">
+    <body name="part_tray_4" pos="2.055 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_4_joint" damping="0.2"/>
       <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
         contype="0" conaffinity="0"/>
