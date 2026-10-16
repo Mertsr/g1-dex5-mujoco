@@ -364,6 +364,21 @@ void G1ManipulationServer::initialize()
     // walking, and a group this node does not build is a goal it rejects outright. It is only
     // ever driven to named postures here -- pose goals for it would need the subgroup IK map,
     // which is why g1.srdf deliberately gives it no kinematics entry.
+    // The IK solvers MoveGroupInterface runs IN THIS PROCESS (setJointValueTarget with a pose,
+    // which Pick uses to check reach before planning) are configured from
+    // robot_description_kinematics.<group>.*. The launch file passes them, but MoveIt's
+    // kinematics loader only reads parameters that are DECLARED, and this node does not declare
+    // overrides automatically -- so every IK call failed with "No kinematics solver instantiated
+    // for group 'left_arm'" and every grasp looked out of reach. Declared here, from whatever the
+    // launch passed, before the groups load the robot model.
+    for (const auto& [param, value] : get_node_parameters_interface()->get_parameter_overrides())
+    {
+        if (param.rfind("robot_description_kinematics.", 0) == 0 && !has_parameter(param))
+        {
+            declare_parameter(param, value);
+        }
+    }
+
     for (const std::string& name :
          { "left_arm", "right_arm", "both_arms", "left_hand", "right_hand" })
     {
@@ -807,7 +822,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             {
                 ArmContext ctx;
                 resolveArm(a, ctx);
-                Attempt at{ c.name, a, std::nullopt, graspFrameGoal(*object_pose, detection->bbox.size.z, ctx), {} };
+                Attempt at{ c.name, a, std::nullopt, graspFrameGoal(*object_pose, detection->bbox.size.z, ctx),
+                            geometry_msgs::msg::Pose() };
                 at.pregrasp = at.grasp;
                 at.pregrasp.position.z += approach_height_m_;
                 attempts.push_back(at);
@@ -823,7 +839,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 ArmContext ctx;
                 resolveArm(a, ctx);
                 MoveGroup* g = groupFor(ctx.arm_group);
-                Attempt    at{ c.name + v.suffix(), a, v.pose, handGoalFromGrasp(v.pose, ctx.is_left), {} };
+                Attempt    at{ c.name + v.suffix(), a, v.pose, handGoalFromGrasp(v.pose, ctx.is_left),
+                               geometry_msgs::msg::Pose() };
                 at.pregrasp = backOff(at.grasp, grasp_approach_m_);
                 // Both ends of the straight-line approach must have an IK solution (collisions
                 // ignored here; the planner checks them).
@@ -877,6 +894,14 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         goal_handle->abort(result);
     };
 
+    if (attempts.empty() && ik_checked > 0 &&
+        !groupFor("right_arm")->getRobotModel()->getJointModelGroup("right_arm")->getSolverInstance())
+    {
+        fail(Pick::Feedback::PHASE_PREGRASP,
+             "this node has no IK solver for the arms, so reach cannot be checked: "
+             "robot_description_kinematics is not reaching g1_manipulation_server's parameters");
+        return;
+    }
     if (attempts.empty())
     {
         fail(Pick::Feedback::PHASE_PREGRASP,
