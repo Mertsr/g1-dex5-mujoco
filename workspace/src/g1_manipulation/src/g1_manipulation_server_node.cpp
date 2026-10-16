@@ -688,6 +688,7 @@ G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::strin
 std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
                                                 const geometry_msgs::msg::Pose& pose)
 {
+    ik_broken_code_ = 0;
     if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
     {
         return std::nullopt;
@@ -706,7 +707,21 @@ std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const 
     {
         return std::nullopt;
     }
-    return future.get()->error_code.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+    const int code = future.get()->error_code.val;
+    if (code == moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
+    {
+        return true;
+    }
+    if (code == moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION ||
+        code == moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT)
+    {
+        return false;
+    }
+    // Anything else is move_group unable to run IK at all -- typically no solver loaded for the
+    // group -- which must not be reported as "out of reach".
+    RCLCPP_ERROR(get_logger(), "/compute_ik for '%s' failed with MoveIt error code %d", group.c_str(), code);
+    ik_broken_code_ = code;
+    return std::nullopt;
 }
 
 void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& goal_handle)
@@ -891,7 +906,12 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 if (!grasp_ik)
                 {
                     fail(Pick::Feedback::PHASE_PREGRASP,
-                         "move_group's /compute_ik did not answer; is move_group running?");
+                         ik_broken_code_ != 0
+                             ? "move_group cannot run IK for " + ctx.arm_group + " (MoveIt error " +
+                                   std::to_string(ik_broken_code_) +
+                                   "): its kinematics plugin did not load. kinematics.yaml uses "
+                                   "pick_ik: sudo apt install ros-humble-pick-ik, then restart"
+                             : "move_group's /compute_ik did not answer; is move_group running?");
                     return;
                 }
                 if (*grasp_ik && hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp).value_or(false))

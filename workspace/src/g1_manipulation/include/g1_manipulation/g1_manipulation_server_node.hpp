@@ -198,6 +198,7 @@ private:
     rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr   get_scene_;
     rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr apply_scene_;
     rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr      compute_ik_;
+    int ik_broken_code_{ 0 };  ///< last /compute_ik error that was not "no solution"
     /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
     /// move_group's /compute_ik. Nothing if the service did not answer.
     std::optional<bool> hasIk(const std::string& group, const std::string& link,
