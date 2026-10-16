@@ -88,29 +88,23 @@ g1_object_tracker:
       # -0.046): report the body frame, so the skills see the same frame from this source as
       # from simulator ground truth.
       output_offset: "0 0.001 -0.046"
-      # Where the hand takes the panel, in its BODY frame: published as panel/grasp/<name> on
-      # /objects (and as the tracked/panel/grasp/<name> TF frame), and what Pick plans to.
+      # Where the hand takes the panel, in its BODY frame: published as panel_N/grasp/<name> on
+      # /objects, drawn in RViz (~/debug/markers), and what Pick plans to.
       #
-      # The pose is the RIGHT hand's grasp frame at the grasp (x along the fingers = the approach
-      # direction, fingers closing toward +y, thumb on +z); the left hand mirrors it.
+      # The pose is the RIGHT hand's grasp frame at the grasp, the point the hand pinches: x along
+      # the fingers (the approach), the four fingers on the -y side, the thumb swung across on +y,
+      # closing toward each other along y. The left hand mirrors it.
       #
-      # edge_high_a / edge_high_b: the panel's tall long edge, at its middle -- the side
-      # opposite the round boss's near edge. Panels sit back to back in the nests and on the tray,
-      # so the hand comes from ABOVE, closing across the edge toward the panel's inside.
+      # edge_high: the panel's tall long edge at its middle (opposite the round boss's near edge),
+      # straight from ABOVE, thumb on the edge's OUTER side and the four fingers on its inner
+      # side, pinching the wall between them, then straight up. In the panel's world-aligned axes
+      # the point is x = -60 mm (8 mm inside the wall's outer face at -68), y = 0, z = +50 mm, the
+      # fingers point down and the thumb is toward -x. As specified on the RViz drawing.
       #
-      # The fingers are tipped 45 degrees along the edge, toward opposite ends of the panel in the
-      # two variants. This is only where Pick starts: it also tries the grasp tilted about the
-      # closing axis (and turned over), keeping the ones the arm can reach from where the robot
-      # stands. At pelvis height the arm reaches nothing past ~0.43 m ahead of the pelvis; stand
-      # with the grasp point 0.28-0.36 m ahead.
-      #
-      # In the panel's world-aligned axes the hand closes at x = -60 mm (8 mm inside the wall's
-      # outer face at -68), y = 0, z = +50 mm; these lines are the same poses in its body frame.
-      # FIRST GUESS from the CAD, not a measured grip: check it in RViz (rviz/perception.rviz
-      # draws it as a gripper) and adjust before trusting a pick.
+      # Pick may tip it up to grasp_tilt_max_deg (15) about the pinch axis to reach; the thumb
+      # and finger sides never change.
       grasps:
-        - "edge_high_a  0.000 -0.050 -0.060  1.5708 0.0 2.3562"
-        - "edge_high_b  0.000 -0.050 -0.060  1.5708 0.0 0.7854"
+        - "edge_high  0.000 -0.050 -0.060  -1.5708 0.0 1.5708"
 
     # Shared by every object.
     tracking:

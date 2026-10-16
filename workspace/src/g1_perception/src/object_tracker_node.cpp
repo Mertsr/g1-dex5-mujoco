@@ -619,8 +619,8 @@ void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const D
                 label.text = text;
                 arr.markers.push_back(label);
 
-                // Each grasp as a gripper: the approach line (yellow) coming in along the grasp
-                // frame's x, the fingers (red, the side they close toward) and the thumb (blue),
+                // Each grasp as the hand: the approach line (yellow) coming in along the grasp
+                // frame's x, the four fingers (red, -y) and the thumb (blue, +y),
                 // the palm bar (white), and a cyan cross where the hand closes.
                 const Eigen::Isometry3f world_T_output = world_T_model * multi_->config(i).model_T_output;
                 for (const auto& g : grasps_[i])
@@ -644,11 +644,14 @@ void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const D
                             lines.colors.push_back(c);
                         }
                     };
-                    const float f = 0.035f;  // finger half-spacing
+                    // Where the RH56E2 actually is in its grasp frame, open for a pinch (from the
+                    // hand's kinematics): the four fingers straight along x on the -y side, reaching
+                    // 0.11 m past the point; the thumb swung across to +y, 0.09 m out. Closing
+                    // brings both to the point.
                     add(Eigen::Vector3f(-0.16f, 0.0f, 0.0f), Eigen::Vector3f(-0.05f, 0.0f, 0.0f), 1.0f, 0.85f, 0.1f);          // approach
-                    add(Eigen::Vector3f(-0.05f, -f, 0.0f), Eigen::Vector3f(-0.05f, f, 0.0f), 0.9f, 0.9f, 0.9f);         // palm
-                    add(Eigen::Vector3f(-0.05f, f, 0.0f), Eigen::Vector3f(0.015f, f, 0.0f), 1.0f, 0.15f, 0.15f);        // fingers
-                    add(Eigen::Vector3f(-0.05f, -f, 0.0f), Eigen::Vector3f(0.015f, -f, 0.0f), 0.2f, 0.4f, 1.0f);        // thumb
+                    add(Eigen::Vector3f(-0.05f, -0.02f, 0.0f), Eigen::Vector3f(-0.05f, 0.09f, 0.0f), 0.9f, 0.9f, 0.9f);   // palm
+                    add(Eigen::Vector3f(-0.05f, -0.02f, 0.0f), Eigen::Vector3f(0.11f, -0.02f, 0.0f), 1.0f, 0.15f, 0.15f); // fingers
+                    add(Eigen::Vector3f(-0.05f, 0.09f, 0.0f), Eigen::Vector3f(0.02f, 0.09f, 0.0f), 0.2f, 0.4f, 1.0f);     // thumb
                     add(Eigen::Vector3f(-0.012f, 0.0f, 0.0f), Eigen::Vector3f(0.012f, 0.0f, 0.0f), 0.0f, 0.9f, 0.9f);         // cross
                     add(Eigen::Vector3f(0.0f, -0.012f, 0.0f), Eigen::Vector3f(0.0f, 0.012f, 0.0f), 0.0f, 0.9f, 0.9f);
                     add(Eigen::Vector3f(0.0f, 0.0f, -0.012f), Eigen::Vector3f(0.0f, 0.0f, 0.012f), 0.0f, 0.9f, 0.9f);

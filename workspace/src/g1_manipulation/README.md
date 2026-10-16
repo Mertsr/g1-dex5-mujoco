@@ -68,7 +68,7 @@ result:
 - `<object>/grasp/<name>`: where a hand takes it. `Pick` uses these instead of the bounding-box top
   grasp below. A published grasp fixes where the hand closes and across what; the tilt of the
   fingers about the closing axis is left free. Each grasp is expanded into tilts up to
-  `grasp_tilt_max_deg` (60) in `grasp_tilt_step_deg` (15) steps, and turned over if
+  `grasp_tilt_max_deg` (15) in `grasp_tilt_step_deg` (15) steps, and turned over if
   `grasp_allow_flip` (off: a turned-over hand twists the wrist into odd postures). Tilts whose fingers do not come down by at least `grasp_min_descent` (0.25,
   the z of the approach direction) are dropped. Every variant is checked with IK for both arms
   under `arm: auto`, nearest side first. The published tilt is tried first, then the nearest ones,
@@ -76,8 +76,9 @@ result:
 
   Reach for a grasp near pelvis height, 0.1 m to the side, from an IK sweep of the arm: nothing
   past about 0.43 m ahead of the pelvis; at 0.36 m, tilts within 30 degrees of vertical; at 0.28 m,
-  up to 45 degrees either way. The pose is the RIGHT hand's grasp frame at the grasp (x along the
-  fingers, which is the approach direction; fingers closing toward +y; thumb on +z), and the left
+  up to 45 degrees either way. The pose is the RIGHT hand's grasp frame at the grasp, the point it
+  pinches (x along the fingers, which is the approach direction; the four fingers on -y, the thumb
+  swung across on +y; the hand goes down in the SRDF's `pinch_open` shape when it has one), and the left
   hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
   (0.12) back along the fingers, then straight in on a Cartesian path, closes, and lifts straight
   up. It does not take a free-space plan, because a free-space plan may swing the fingers through

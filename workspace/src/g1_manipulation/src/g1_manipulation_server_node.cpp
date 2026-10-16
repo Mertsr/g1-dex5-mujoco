@@ -188,7 +188,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // A published grasp is tried turned about its closing axis by up to this much, in these
     // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
     // by at least grasp_min_descent (the z of the approach direction) are kept.
-    grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 60.0) * M_PI / 180.0;
+    grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 15.0) * M_PI / 180.0;
     grasp_tilt_step_rad_ = declare_parameter<double>("grasp_tilt_step_deg", 15.0) * M_PI / 180.0;
     grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", false);
     // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
@@ -1056,7 +1056,13 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // Opened before the approach, not after: closing on the way in would knock the object
         // off the table before the hand is around it. Reported separately from the arm move: a
         // hand that will not open is an unacquired or unpowered hand, not geometry.
-        if (!moveToNamed(*hand_group, "open"))
+        // A published grasp is a pinch: thumb across from the fingers before going down, if the
+        // hand has that shape ("pinch_open" in g1.srdf). The bounding-box grasp opens fully.
+        const auto& shapes = hand_group->getNamedTargets();
+        const std::string open_shape =
+            grasp_pose && std::find(shapes.begin(), shapes.end(), "pinch_open") != shapes.end() ? "pinch_open"
+                                                                                                : "open";
+        if (!moveToNamed(*hand_group, open_shape))
         {
             fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
             return;
