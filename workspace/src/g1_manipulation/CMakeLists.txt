@@ -11,6 +11,7 @@ find_package(vision_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(shape_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -35,7 +36,7 @@ target_include_directories(g1_manipulation_server_node PUBLIC
 target_compile_features(g1_manipulation_server_node PUBLIC cxx_std_20)
 ament_target_dependencies(g1_manipulation_server_node PUBLIC
   rclcpp rclcpp_action g1_msgs geometry_msgs vision_msgs
-  moveit_ros_planning_interface moveit_msgs shape_msgs tf2 tf2_geometry_msgs)
+  moveit_ros_planning_interface moveit_msgs std_srvs shape_msgs tf2 tf2_geometry_msgs)
 
 add_executable(g1_manipulation_server src/g1_manipulation_server_main.cpp)
 target_link_libraries(g1_manipulation_server PUBLIC g1_manipulation_server_node)

@@ -191,6 +191,9 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 60.0) * M_PI / 180.0;
     grasp_tilt_step_rad_ = declare_parameter<double>("grasp_tilt_step_deg", 15.0) * M_PI / 180.0;
     grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", false);
+    // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
+    // it before re-planning (the updaters run at up to 5 Hz).
+    octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
 
@@ -208,6 +211,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // solver plugin is configured, loaded and proven where the planning happens, and an
     // in-process copy failed to instantiate here ("No kinematics solver instantiated").
     compute_ik_ = create_client<moveit_msgs::srv::GetPositionIK>("/compute_ik");
+    clear_octomap_ = create_client<std_srvs::srv::Empty>("/clear_octomap");
 }
 
 bool G1ManipulationServer::allowHandContact(
@@ -585,10 +589,8 @@ bool G1ManipulationServer::moveTo(
     group.setPoseTarget(pose, link);
 
     MoveGroup::Plan plan;
-    const auto      planned = group.plan(plan);
-    if (planned != moveit::core::MoveItErrorCode::SUCCESS)
+    if (!planWithRecovery(group, plan, what))
     {
-        RCLCPP_ERROR(get_logger(), "%s: planning failed (%d)", what.c_str(), planned.val);
         return false;
     }
     const auto executed = group.execute(plan);
@@ -629,10 +631,8 @@ bool G1ManipulationServer::moveToNamed(MoveGroup& group, const std::string& name
     // at PLAN time. This only drops a during-flight recheck that, on this stack, reports the
     // robot's own arm.
     MoveGroup::Plan plan;
-    const auto      planned = group.plan(plan);
-    if (planned != moveit::core::MoveItErrorCode::SUCCESS)
+    if (!planWithRecovery(group, plan, "'" + named_target + "'"))
     {
-        RCLCPP_ERROR(get_logger(), "'%s': planning failed (%d)", named_target.c_str(), planned.val);
         return false;
     }
     return group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
@@ -686,7 +686,8 @@ G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::strin
 }
 
 std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
-                                                const geometry_msgs::msg::Pose& pose)
+                                                const geometry_msgs::msg::Pose& pose,
+                                                std::map<std::string, double>* joints)
 {
     ik_broken_code_ = 0;
     if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
@@ -707,9 +708,24 @@ std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const 
     {
         return std::nullopt;
     }
-    const int code = future.get()->error_code.val;
+    const auto response = future.get();
+    const int  code     = response->error_code.val;
     if (code == moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
     {
+        if (joints)
+        {
+            // Only the group's own joints: the rest of the state is what it already is.
+            const auto& names = groupFor(group)->getActiveJoints();
+            const auto& js    = response->solution.joint_state;
+            joints->clear();
+            for (std::size_t i = 0; i < js.name.size() && i < js.position.size(); ++i)
+            {
+                if (std::find(names.begin(), names.end(), js.name[i]) != names.end())
+                {
+                    (*joints)[js.name[i]] = js.position[i];
+                }
+            }
+        }
         return true;
     }
     if (code == moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION ||
@@ -722,6 +738,58 @@ std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const 
     RCLCPP_ERROR(get_logger(), "/compute_ik for '%s' failed with MoveIt error code %d", group.c_str(), code);
     ik_broken_code_ = code;
     return std::nullopt;
+}
+
+bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what)
+{
+    auto planned = group.plan(plan);
+    if (planned == moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        return true;
+    }
+    // The usual cause after a pick that got part-way: the hand is now where the octomap still
+    // has voxels from before it got there (the self-filter only stops NEW points of the robot
+    // being mapped), so the start state is in collision and every plan fails, including the one
+    // to move away. Clearing the map and letting the sensors refill it -- without the hand, which
+    // they filter out -- is the fix. Waited for, so the retry does not plan in an empty world.
+    RCLCPP_WARN(get_logger(), "%s: planning failed (%d); clearing the octomap and retrying once", what.c_str(),
+                planned.val);
+    if (clear_octomap_->wait_for_service(std::chrono::seconds(1)))
+    {
+        auto future = clear_octomap_->async_send_request(std::make_shared<std_srvs::srv::Empty::Request>());
+        future.wait_for(std::chrono::seconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(octomap_refill_s_ * 1000)));
+    }
+    group.setStartStateToCurrentState();
+    planned = group.plan(plan);
+    if (planned != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(get_logger(), "%s: planning failed again (%d)", what.c_str(), planned.val);
+        return false;
+    }
+    return true;
+}
+
+bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints,
+                                        const std::string& what)
+{
+    group.setStartStateToCurrentState();
+    if (!group.setJointValueTarget(joints))
+    {
+        RCLCPP_ERROR(get_logger(), "%s: joint target rejected", what.c_str());
+        return false;
+    }
+    MoveGroup::Plan plan;
+    if (!planWithRecovery(group, plan, what))
+    {
+        return false;
+    }
+    if (group.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(get_logger(), "%s: execution failed", what.c_str());
+        return false;
+    }
+    return true;
 }
 
 void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& goal_handle)
@@ -863,6 +931,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         std::string              arm;
         std::optional<geometry_msgs::msg::Pose> grasp_pose;
         geometry_msgs::msg::Pose grasp, pregrasp;
+        /// The pregrasp as joint values, from IK seeded at the current arm: planned to directly,
+        /// so the arm goes to the solution nearest where it is, not whichever one OMPL samples
+        /// for a pose goal (with a 7-joint arm, often a twisted elbow and wrist).
+        std::map<std::string, double> pregrasp_joints;
     };
     std::vector<Attempt> attempts;
     std::string          unreachable;
@@ -885,8 +957,17 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             continue;
         }
         int reachable_here = 0;
-        for (const GraspVariant& v :
-             graspVariants(*c.pose, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_))
+        // Most vertical first: the hand comes down onto the edge from above when it can, and
+        // tips only as far as reach needs.
+        auto variants =
+            graspVariants(*c.pose, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_);
+        std::stable_sort(variants.begin(), variants.end(), [](const GraspVariant& a, const GraspVariant& b) {
+            tf2::Quaternion qa, qb;
+            tf2::fromMsg(a.pose.orientation, qa);
+            tf2::fromMsg(b.pose.orientation, qb);
+            return tf2::Matrix3x3(qa).getColumn(0).z() < tf2::Matrix3x3(qb).getColumn(0).z();
+        });
+        for (const GraspVariant& v : variants)
         {
             if (static_cast<int>(attempts.size()) >= grasp_max_plans_)
             {
@@ -914,7 +995,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                              : "move_group's /compute_ik did not answer; is move_group running?");
                     return;
                 }
-                if (*grasp_ik && hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp).value_or(false))
+                if (*grasp_ik &&
+                    hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp, &at.pregrasp_joints).value_or(false))
                 {
                     attempts.push_back(at);
                     ++reachable_here;
@@ -979,7 +1061,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
             return;
         }
-        if (moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, "pregrasp (" + at.label + ")"))
+        const std::string what = "pregrasp (" + at.label + ")";
+        if (at.pregrasp_joints.empty() ? moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, what)
+                                       : moveToJoints(*arm_group, at.pregrasp_joints, what))
         {
             reached = true;
             break;

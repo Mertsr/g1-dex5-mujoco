@@ -34,6 +34,7 @@
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <moveit_msgs/srv/get_planning_scene.hpp>
 #include <moveit_msgs/srv/get_position_ik.hpp>
+#include <std_srvs/srv/empty.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -202,7 +203,14 @@ private:
     /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
     /// move_group's /compute_ik. Nothing if the service did not answer.
     std::optional<bool> hasIk(const std::string& group, const std::string& link,
-                              const geometry_msgs::msg::Pose& pose);
+                              const geometry_msgs::msg::Pose& pose,
+                              std::map<std::string, double>* joints = nullptr);
+    rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
+    double octomap_refill_s_{ 1.0 };
+    /// plan(), and on failure clear the octomap, let it refill and plan once more: a start
+    /// state in collision with stale voxels otherwise blocks every move, including moving away.
+    bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
+    bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
 
     rclcpp_action::Server<Pick>::SharedPtr          pick_server_;
     rclcpp_action::Server<Place>::SharedPtr         place_server_;
