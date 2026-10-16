@@ -14,6 +14,8 @@
 #include <memory>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <thread>
@@ -188,11 +190,37 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // A published grasp is tried turned about its closing axis by up to this much, in these
     // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
     // by at least grasp_min_descent (the z of the approach direction) are kept.
-    grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 90.0) * M_PI / 180.0;
+    grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 60.0) * M_PI / 180.0;
     grasp_tilt_step_rad_ = declare_parameter<double>("grasp_tilt_step_deg", 15.0) * M_PI / 180.0;
-    grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", true);
+    grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", false);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
+    // The fixed furniture of the world the robot is in (scene_obstacles.<scene>), added to the
+    // planning scene before every pick and place. The LiDAR octomap misses what the head cannot
+    // see -- a tray edge right below the hand, a fence behind the elbow -- and the arm planned
+    // straight through the tray wall without these.
+    {
+        const std::string scene = declare_parameter<std::string>("scene", "");
+        if (!scene.empty())
+        {
+            for (const auto& spec : declare_parameter<std::vector<std::string>>(
+                     "scene_obstacles." + scene, std::vector<std::string>{}))
+            {
+                std::istringstream in(spec);
+                StaticObstacle     o;
+                double             r = 0, p = 0, y = 0;
+                if (!(in >> o.name >> o.frame >> o.cx >> o.cy >> o.cz >> o.sx >> o.sy >> o.sz))
+                {
+                    throw std::runtime_error("scene_obstacles." + scene + ": '" + spec +
+                                             "' is not 'name frame cx cy cz sx sy sz [roll pitch yaw]'");
+                }
+                in >> r >> p >> y;
+                o.rotation.setRPY(r, p, y);
+                static_obstacles_.push_back(o);
+            }
+            RCLCPP_INFO(get_logger(), "scene '%s': %zu fixed obstacles", scene.c_str(), static_obstacles_.size());
+        }
+    }
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -685,6 +713,42 @@ G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::strin
     return it == groups_.end() ? nullptr : it->second.get();
 }
 
+void G1ManipulationServer::applyStaticObstacles()
+{
+    if (static_obstacles_.empty())
+    {
+        return;
+    }
+    // Expressed in the planning frame (the pelvis) as the robot stands NOW: re-applied at the
+    // start of every skill, because the pelvis frame moves with every step.
+    std::vector<moveit_msgs::msg::CollisionObject> objects;
+    for (const StaticObstacle& o : static_obstacles_)
+    {
+        geometry_msgs::msg::Pose pose;
+        pose.position.x  = o.cx;
+        pose.position.y  = o.cy;
+        pose.position.z  = o.cz;
+        pose.orientation = tf2::toMsg(o.rotation);
+        const auto in_planning = toPlanningFrame(pose, o.frame);
+        if (!in_planning)
+        {
+            RCLCPP_WARN(get_logger(), "obstacle %s: no transform from %s; skipped", o.name.c_str(), o.frame.c_str());
+            continue;
+        }
+        moveit_msgs::msg::CollisionObject object;
+        object.id              = "scene/" + o.name;
+        object.header.frame_id = planning_frame_;
+        shape_msgs::msg::SolidPrimitive box;
+        box.type       = shape_msgs::msg::SolidPrimitive::BOX;
+        box.dimensions = { o.sx, o.sy, o.sz };
+        object.primitives.push_back(box);
+        object.primitive_poses.push_back(*in_planning);
+        object.operation = moveit_msgs::msg::CollisionObject::ADD;
+        objects.push_back(object);
+    }
+    planning_scene_.applyCollisionObjects(objects);
+}
+
 std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
                                                 const geometry_msgs::msg::Pose& pose)
 {
@@ -747,6 +811,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     feedback->phase = Pick::Feedback::PHASE_LOCATING;
     goal_handle->publish_feedback(feedback);
+    applyStaticObstacles();
     // Waited for, briefly: a tracked part can be between frames, or still being searched for
     // the moment the robot has turned to it.
     auto detection = lookUpObject(goal->object_id);
@@ -1103,6 +1168,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     const auto goal     = goal_handle->get_goal();
     auto       result   = std::make_shared<Place::Result>();
     auto       feedback = std::make_shared<Place::Feedback>();
+    applyStaticObstacles();
 
     // What is held, read from the scene rather than remembered, because the attachment is the
     // authority on what the hand actually has. Needed BEFORE the exemption is applied: the

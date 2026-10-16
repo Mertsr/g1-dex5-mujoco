@@ -68,8 +68,8 @@ result:
 - `<object>/grasp/<name>`: where a hand takes it. `Pick` uses these instead of the bounding-box top
   grasp below. A published grasp fixes where the hand closes and across what; the tilt of the
   fingers about the closing axis is left free. Each grasp is expanded into tilts up to
-  `grasp_tilt_max_deg` (90) in `grasp_tilt_step_deg` (15) steps, and turned over if
-  `grasp_allow_flip`. Tilts whose fingers do not come down by at least `grasp_min_descent` (0.25,
+  `grasp_tilt_max_deg` (60) in `grasp_tilt_step_deg` (15) steps, and turned over if
+  `grasp_allow_flip` (off: a turned-over hand twists the wrist into odd postures). Tilts whose fingers do not come down by at least `grasp_min_descent` (0.25,
   the z of the approach direction) are dropped. Every variant is checked with IK for both arms
   under `arm: auto`, nearest side first. The published tilt is tried first, then the nearest ones,
   and at most `grasp_max_plans` (6) reachable ones are planned to.
@@ -95,6 +95,15 @@ places with the hand that picked.
 ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel, arm: auto}" --feedback
 ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_2, arm: auto}" --feedback
 ```
+
+## Fixed obstacles
+
+`scene_obstacles.<world>` in `config/g1_manipulation_server.yaml` lists the world's fixed
+furniture as boxes (`"name frame cx cy cz sx sy sz [roll pitch yaw]"`, full sizes). Bringup
+passes `scene:=<world>`, and every Pick and Place first adds them to the planning scene in the
+pelvis frame as the robot stands. The LiDAR octomap only has what the head has seen; without these
+the arm planned through the tray's wall. Legs are listed as legs, not as one block under each
+table, because a block would overlap the robot's own legs and fail every plan.
 
 ## Where the hand grips
 

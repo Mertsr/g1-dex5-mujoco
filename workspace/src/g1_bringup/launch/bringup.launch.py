@@ -308,6 +308,7 @@ def _setup(context, *args, **kwargs):
                 ),
                 launch_arguments={
                     "object_source": LaunchConfiguration("object_source"),
+                    "scene": LaunchConfiguration("world"),
                 }.items(),
             )
         )
