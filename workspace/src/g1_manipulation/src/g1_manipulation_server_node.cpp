@@ -80,6 +80,56 @@ geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double di
     return out;
 }
 
+std::string GraspVariant::suffix() const
+{
+    if (std::abs(tilt) < 1e-6 && !flipped)
+    {
+        return "";
+    }
+    char buf[48];
+    std::snprintf(buf, sizeof buf, " (tilt %+.0f deg%s)", tilt * 180.0 / M_PI, flipped ? ", turned over" : "");
+    return buf;
+}
+
+std::vector<GraspVariant> graspVariants(const geometry_msgs::msg::Pose& grasp, double max_tilt, double step,
+                                        bool allow_flip, double min_descent)
+{
+    std::vector<double> tilts{ 0.0 };
+    if (step > 1e-6)
+    {
+        for (double t = step; t <= max_tilt + 1e-9; t += step)
+        {
+            tilts.push_back(t);
+            tilts.push_back(-t);
+        }
+    }
+    tf2::Quaternion base;
+    tf2::fromMsg(grasp.orientation, base);
+    std::vector<GraspVariant> out;
+    for (const bool flipped : allow_flip ? std::vector<bool>{ false, true } : std::vector<bool>{ false })
+    {
+        tf2::Quaternion over;
+        over.setRPY(flipped ? M_PI : 0.0, 0.0, 0.0);
+        for (const double t : tilts)
+        {
+            tf2::Quaternion tilt;
+            tilt.setRPY(0.0, t, 0.0);  // about the grasp's own y: the closing axis
+            const tf2::Quaternion q = (base * over * tilt).normalized();
+            if (tf2::Matrix3x3(q).getColumn(0).z() > -min_descent)
+            {
+                continue;  // fingers level or pointing up: not coming down onto the part
+            }
+            GraspVariant v;
+            v.tilt          = t;
+            v.flipped       = flipped;
+            v.pose          = grasp;
+            v.pose.orientation = tf2::toMsg(q);
+            out.push_back(v);
+        }
+    }
+    return out;
+}
+
 std::optional<geometry_msgs::msg::Pose> findHypothesis(
     const vision_msgs::msg::Detection3D& detection, const std::string& class_id)
 {
@@ -135,6 +185,14 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.12);
     locate_timeout_s_    = declare_parameter<double>("locate_timeout_s", 3.0);
     linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
+    // A published grasp is tried turned about its closing axis by up to this much, in these
+    // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
+    // by at least grasp_min_descent (the z of the approach direction) are kept.
+    grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 90.0) * M_PI / 180.0;
+    grasp_tilt_step_rad_ = declare_parameter<double>("grasp_tilt_step_deg", 15.0) * M_PI / 180.0;
+    grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", true);
+    grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
+    grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -671,7 +729,87 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         candidates.push_back({ "the bounding-box top grasp", std::nullopt });
     }
 
-    // Filled for whichever candidate's pregrasp turns out reachable.
+    // The arms to try, in order. "auto": the hand on the side the grasp point is on first (the
+    // planning frame is the pelvis, +y to the robot's left), then the other one.
+    const auto arms_for = [&](double y) -> std::vector<std::string> {
+        if (goal->arm != "auto")
+        {
+            return { goal->arm };
+        }
+        return y >= 0.0 ? std::vector<std::string>{ "left", "right" }
+                        : std::vector<std::string>{ "right", "left" };
+    };
+
+    // A published grasp fixes WHERE the hand closes and across what (its closing axis), not
+    // exactly how the hand is turned: a pinch across a wall is the same grasp with the fingers
+    // tipped anywhere in the wall's plane, i.e. turned about the closing axis. Which tilt the arm
+    // can reach depends on where the robot stands, so every candidate is expanded into tilts
+    // (and, optionally, the hand turned over), checked with IK first -- cheap -- and only the
+    // reachable ones are planned. The configured tilt comes first, then the nearest ones.
+    struct Attempt
+    {
+        std::string              label;
+        std::string              arm;
+        std::optional<geometry_msgs::msg::Pose> grasp_pose;
+        geometry_msgs::msg::Pose grasp, pregrasp;
+    };
+    std::vector<Attempt> attempts;
+    std::string          unreachable;
+    int                  ik_checked = 0;
+    for (const Candidate& c : candidates)
+    {
+        const double y = c.pose ? c.pose->position.y : object_pose->position.y;
+        if (!c.pose)
+        {
+            for (const std::string& a : arms_for(y))
+            {
+                ArmContext ctx;
+                resolveArm(a, ctx);
+                Attempt at{ c.name, a, std::nullopt, graspFrameGoal(*object_pose, detection->bbox.size.z, ctx), {} };
+                at.pregrasp = at.grasp;
+                at.pregrasp.position.z += approach_height_m_;
+                attempts.push_back(at);
+            }
+            continue;
+        }
+        int reachable_here = 0;
+        for (const GraspVariant& v :
+             graspVariants(*c.pose, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_))
+        {
+            for (const std::string& a : arms_for(y))
+            {
+                ArmContext ctx;
+                resolveArm(a, ctx);
+                MoveGroup* g = groupFor(ctx.arm_group);
+                Attempt    at{ c.name + v.suffix(), a, v.pose, handGoalFromGrasp(v.pose, ctx.is_left), {} };
+                at.pregrasp = backOff(at.grasp, grasp_approach_m_);
+                // Both ends of the straight-line approach must have an IK solution (collisions
+                // ignored here; the planner checks them).
+                g->setStartStateToCurrentState();
+                ++ik_checked;
+                const bool ok = g->setJointValueTarget(at.pregrasp, ctx.grasp_frame) &&
+                                g->setJointValueTarget(at.grasp, ctx.grasp_frame);
+                g->clearPoseTargets();
+                if (ok)
+                {
+                    attempts.push_back(at);
+                    ++reachable_here;
+                }
+            }
+        }
+        if (reachable_here == 0)
+        {
+            char where[160];
+            std::snprintf(where, sizeof where, "%s: no tilt reachable by %s, grasp at pelvis (%.2f, %.2f, %.2f) m",
+                          c.name.c_str(), goal->arm == "auto" ? "either arm" : goal->arm.c_str(),
+                          c.pose->position.x, c.pose->position.y, c.pose->position.z);
+            unreachable += (unreachable.empty() ? "" : "; ") + std::string(where);
+        }
+    }
+    RCLCPP_INFO(get_logger(), "pick %s: %zu reachable grasp poses out of %d IK checks",
+                goal->object_id.c_str(), attempts.size(), ik_checked);
+
+    // Filled for whichever attempt's pregrasp is planned to.
     ArmContext                              arm;
     MoveGroup*                              arm_group  = nullptr;
     MoveGroup*                              hand_group = nullptr;
@@ -683,13 +821,28 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
     // retry meaningful rather than a replay.
     const auto fail = [&](const std::string& phase, const std::string& why) {
-        moveToNamed(*hand_group, "open");
-        arm_group->detachObject(goal->object_id);
-        allowHandContact(arm, { "<octomap>", goal->object_id }, false);
+        if (hand_group)
+        {
+            moveToNamed(*hand_group, "open");
+        }
+        if (arm_group)
+        {
+            arm_group->detachObject(goal->object_id);
+            allowHandContact(arm, { "<octomap>", goal->object_id }, false);
+        }
         result->success = false;
         result->message = phase + ": " + why;
         goal_handle->abort(result);
     };
+
+    if (attempts.empty())
+    {
+        fail(Pick::Feedback::PHASE_PREGRASP,
+             "out of reach at every tilt of every grasp (" + unreachable +
+                 "). Stand closer: for a grasp near pelvis height the arm reaches about 0.28-0.36 m "
+                 "ahead of the pelvis (x) at 0.1 m to the side, and nothing past ~0.43 m.");
+        return;
+    }
 
     const moveit_msgs::msg::CollisionObject object =
         publishCollisionObject(*detection, *object_pose);
@@ -698,75 +851,50 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     goal_handle->publish_feedback(feedback);
     bool        reached = false;
     std::string tried;
-    for (const Candidate& c : candidates)
+    int         planned = 0;
+    for (const Attempt& at : attempts)
     {
-        // "auto": the hand on the side the grasp point is on. The planning frame is the pelvis,
-        // +y to the robot's left.
-        arm_name = goal->arm;
-        if (arm_name == "auto")
+        if (planned >= grasp_max_plans_)
         {
-            const double y = c.pose ? c.pose->position.y : object_pose->position.y;
-            arm_name       = y >= 0.0 ? "left" : "right";
+            break;
         }
+        ++planned;
+        arm_name = at.arm;
         resolveArm(arm_name, arm);
-        arm_group  = groupFor(arm.arm_group);
-        hand_group = groupFor(arm.hand_group);
-        grasp_pose = c.pose;
-        grasp_goal = grasp_pose ? handGoalFromGrasp(*grasp_pose, arm.is_left)
-                                : graspFrameGoal(*object_pose, detection->bbox.size.z, arm);
-        if (grasp_pose)
-        {
-            pregrasp_goal = backOff(grasp_goal, grasp_approach_m_);
-        }
-        else
-        {
-            pregrasp_goal = grasp_goal;
-            pregrasp_goal.position.z += approach_height_m_;
-        }
+        arm_group     = groupFor(arm.arm_group);
+        hand_group    = groupFor(arm.hand_group);
+        grasp_pose    = at.grasp_pose;
+        grasp_goal    = at.grasp;
+        pregrasp_goal = at.pregrasp;
         RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", goal->object_id.c_str(),
-                    c.name.c_str(), arm_name.c_str());
+                    at.label.c_str(), arm_name.c_str());
 
         // Opened before the approach, not after: closing on the way in would knock the object
-        // off the table before the hand is around it.
-        //
-        // Reported separately from the arm move rather than sharing one message. They fail for
-        // completely different reasons -- a hand that will not open is usually an unacquired or
-        // unpowered hand, an arm that will not reach is geometry -- and collapsing both into
-        // "could not reach the pregrasp pose" sends anyone debugging it to the wrong place.
+        // off the table before the hand is around it. Reported separately from the arm move: a
+        // hand that will not open is an unacquired or unpowered hand, not geometry.
         if (!moveToNamed(*hand_group, "open"))
         {
             fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
             return;
         }
-        if (moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, "pregrasp (" + c.name + ")"))
+        if (moveTo(*arm_group, pregrasp_goal, arm.grasp_frame, "pregrasp (" + at.label + ")"))
         {
             reached = true;
             break;
         }
-        // Why not: out of the arm's reach altogether (no IK solution, collisions ignored), or
-        // reachable but blocked -- in collision with the octomap or the object, or no path. The
-        // two need opposite fixes: stand somewhere else, or change the approach.
-        arm_group->setStartStateToCurrentState();
-        const bool has_ik = arm_group->setJointValueTarget(pregrasp_goal, arm.grasp_frame);
-        arm_group->clearPoseTargets();
-        char where[200];
-        std::snprintf(where, sizeof where, "grasp at pelvis (%.2f, %.2f, %.2f) m, pregrasp at (%.2f, %.2f, %.2f)",
-                      grasp_goal.position.x, grasp_goal.position.y, grasp_goal.position.z,
-                      pregrasp_goal.position.x, pregrasp_goal.position.y, pregrasp_goal.position.z);
-        RCLCPP_WARN(get_logger(), "pick %s: %s with the %s hand: %s; %s", goal->object_id.c_str(), c.name.c_str(),
-                    arm_name.c_str(), has_ik ? "the arm CAN reach it, but the plan was blocked (collision or no path)"
-                                             : "OUT OF REACH (no IK solution even ignoring collisions)",
-                    where);
-        tried += (tried.empty() ? "" : "; ") + c.name + " (" + arm_name + ", " +
-                 (has_ik ? "reachable but blocked" : "out of reach") + ", " + where + ")";
+        // IK said reachable, so this one is blocked: the open hand or the arm on the way hits the
+        // octomap or the part's box, or no path was found in time.
+        RCLCPP_WARN(get_logger(), "pick %s: %s with the %s hand is reachable but the plan was blocked",
+                    goal->object_id.c_str(), at.label.c_str(), arm_name.c_str());
+        tried += (tried.empty() ? "" : "; ") + at.label + " (" + arm_name + ")";
     }
     if (!reached)
     {
         fail(Pick::Feedback::PHASE_PREGRASP,
-             "could not reach the pregrasp of any grasp: " + tried +
-                 ". Out of reach: stand so the grasp point is 0.25-0.45 m ahead of the pelvis (x) "
-                 "and within 0.35 m to the side (|y|). Blocked: the open hand at the pregrasp hits "
-                 "the octomap or the part's box.");
+             "reachable but blocked: " + tried +
+                 (unreachable.empty() ? "" : "; out of reach: " + unreachable) +
+                 ". The open hand at the pregrasp hits the octomap or the part's box, or the arm "
+                 "has no collision-free path there.");
         return;
     }
 

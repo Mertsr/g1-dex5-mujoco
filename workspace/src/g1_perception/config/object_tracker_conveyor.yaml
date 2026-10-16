@@ -86,11 +86,11 @@ g1_object_tracker:
       # opposite the round boss's near edge. Panels sit back to back in the nests and on the tray,
       # so the hand comes from ABOVE, closing across the edge toward the panel's inside.
       #
-      # The fingers are tipped 45 degrees along the edge, not straight down: an IK sweep of the
-      # G1 arm reaches a fingers-down grasp almost nowhere, and the 45-degree one everywhere from
-      # 0.25 to 0.45 m ahead of the pelvis and up to 0.35 m to the side. The two variants tip
-      # toward opposite ends of the panel; Pick tries first the one whose fingers point most
-      # AWAY from the robot, then the other, so the robot can come at a panel from either end.
+      # The fingers are tipped 45 degrees along the edge, toward opposite ends of the panel in the
+      # two variants. This is only where Pick starts: it also tries the grasp tilted about the
+      # closing axis (and turned over), keeping the ones the arm can reach from where the robot
+      # stands. At pelvis height the arm reaches nothing past ~0.43 m ahead of the pelvis; stand
+      # with the grasp point 0.28-0.36 m ahead.
       #
       # In the panel's world-aligned axes the hand closes at x = -60 mm (8 mm inside the wall's
       # outer face at -68), y = 0, z = +50 mm; these lines are the same poses in its body frame.

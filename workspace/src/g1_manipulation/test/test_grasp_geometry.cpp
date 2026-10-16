@@ -168,3 +168,38 @@ TEST(ObjectGrasp, BackOffRetreatsAgainstTheFingers)
     EXPECT_NEAR(pre.position.x, 0.3, 1e-9);
     EXPECT_NEAR(pre.position.z, 0.22, 1e-9);  // straight up: the approach comes down
 }
+
+// Variants of a published grasp keep the point and the closing axis, and only turn the fingers in
+// the plane across it; the published orientation comes first, and nothing points the fingers up.
+TEST(ObjectGrasp, VariantsTurnAboutTheClosingAxis)
+{
+    geometry_msgs::msg::Pose grasp = objectAt(0.3, -0.1, 0.02);
+    tf2::Quaternion          down;
+    down.setRPY(0.0, M_PI_2, 0.0);  // fingers at the floor, closing toward +y
+    grasp.orientation = tf2::toMsg(down);
+
+    const auto variants = g1_manipulation::graspVariants(grasp, M_PI_2, M_PI / 12, true, 0.25);
+    ASSERT_FALSE(variants.empty());
+    EXPECT_DOUBLE_EQ(variants.front().tilt, 0.0);
+    EXPECT_FALSE(variants.front().flipped);
+    EXPECT_EQ(variants.front().suffix(), "");
+
+    tf2::Quaternion q0;
+    tf2::fromMsg(grasp.orientation, q0);
+    const tf2::Vector3 closing = tf2::Matrix3x3(q0).getColumn(1);
+    int                flipped = 0;
+    for (const auto& v : variants)
+    {
+        EXPECT_DOUBLE_EQ(v.pose.position.x, 0.3);
+        EXPECT_DOUBLE_EQ(v.pose.position.z, 0.02);
+        tf2::Quaternion q;
+        tf2::fromMsg(v.pose.orientation, q);
+        const tf2::Matrix3x3 R(q);
+        EXPECT_NEAR(std::abs(R.getColumn(1).dot(closing)), 1.0, 1e-9);  // same closing axis
+        EXPECT_LE(R.getColumn(0).z(), -0.25 + 1e-9);                      // fingers coming down
+        flipped += v.flipped ? 1 : 0;
+    }
+    // cos(tilt) >= 0.25 keeps |tilt| <= 75 deg: 0, +-15 .. +-75, each way up.
+    EXPECT_EQ(variants.size(), 22u);
+    EXPECT_EQ(flipped, 11);
+}

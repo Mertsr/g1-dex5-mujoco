@@ -70,6 +70,23 @@ geometry_msgs::msg::Pose handGoalFromGrasp(const geometry_msgs::msg::Pose& grasp
 /// reverse -- where the straight-line approach starts and the retreat ends.
 geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double distance);
 
+/// A published grasp turned about its closing axis (the grasp frame's y) by `tilt`, and turned
+/// over (half a turn about the fingers) if `flipped`: the same pinch at the same point.
+struct GraspVariant
+{
+    double                   tilt{ 0.0 };
+    bool                     flipped{ false };
+    geometry_msgs::msg::Pose pose;
+    /// " (tilt +30 deg, turned over)", or "" for the grasp as published.
+    std::string suffix() const;
+};
+
+/// `grasp` and its variants, as published first, then by increasing |tilt| (+ before -), then the
+/// same turned over. Variants whose fingers do not point down by at least `min_descent` (the z of
+/// the approach direction, in the frame `grasp` is in) are dropped.
+std::vector<GraspVariant> graspVariants(const geometry_msgs::msg::Pose& grasp, double max_tilt, double step,
+                                        bool allow_flip, double min_descent);
+
 /// The pose a detection carries under `class_id` among its results (object pose first, then the
 /// grasps and slots a tracker adds), or nothing.
 std::optional<geometry_msgs::msg::Pose> findHypothesis(
@@ -201,6 +218,11 @@ private:
     double grasp_approach_m_{ 0.12 };  ///< straight-line approach and retreat length
     double linear_min_fraction_{ 0.95 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
+    double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
+    double grasp_tilt_step_rad_{ M_PI / 12 };
+    bool   grasp_allow_flip_{ true };
+    double grasp_min_descent_{ 0.25 };
+    int    grasp_max_plans_{ 6 };  ///< IK-reachable grasps planned to before giving up
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;

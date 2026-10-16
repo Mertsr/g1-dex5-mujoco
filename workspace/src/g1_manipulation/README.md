@@ -66,10 +66,17 @@ A detection may carry more than its pose. `g1_perception`'s tracker adds, after 
 result:
 
 - `<object>/grasp/<name>`: where a hand takes it. `Pick` uses these instead of the bounding-box top
-  grasp below. It tries them in order, the one whose fingers point most away from the robot first,
-  and takes the first whose pregrasp it can reach. Reach for a grasp tipped 45 degrees is 0.25 to
-  0.45 m ahead of the pelvis and up to 0.35 m to the side; a fingers-straight-down grasp is
-  reachable almost nowhere on the G1, according to an IK sweep. The pose is the RIGHT hand's grasp frame at the grasp (x along the
+  grasp below. A published grasp fixes where the hand closes and across what; the tilt of the
+  fingers about the closing axis is left free. Each grasp is expanded into tilts up to
+  `grasp_tilt_max_deg` (90) in `grasp_tilt_step_deg` (15) steps, and turned over if
+  `grasp_allow_flip`. Tilts whose fingers do not come down by at least `grasp_min_descent` (0.25,
+  the z of the approach direction) are dropped. Every variant is checked with IK for both arms
+  under `arm: auto`, nearest side first. The published tilt is tried first, then the nearest ones,
+  and at most `grasp_max_plans` (6) reachable ones are planned to.
+
+  Reach for a grasp near pelvis height, 0.1 m to the side, from an IK sweep of the arm: nothing
+  past about 0.43 m ahead of the pelvis; at 0.36 m, tilts within 30 degrees of vertical; at 0.28 m,
+  up to 45 degrees either way. The pose is the RIGHT hand's grasp frame at the grasp (x along the
   fingers, which is the approach direction; fingers closing toward +y; thumb on +z), and the left
   hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
   (0.12) back along the fingers, then straight in on a Cartesian path, closes, and lifts straight
@@ -80,8 +87,8 @@ result:
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the
   retreat are straight lines along the grasp's approach.
 
-`arm: auto` picks with the hand on the grasp point's side of the pelvis, and places with the hand
-that picked.
+`arm: auto` picks with the hand on the grasp point's side of the pelvis first, then the other hand, and
+places with the hand that picked.
 
 ```bash
 ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel, arm: auto}" --feedback
