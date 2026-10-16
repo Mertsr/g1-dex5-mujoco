@@ -33,6 +33,7 @@
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <moveit_msgs/srv/get_planning_scene.hpp>
+#include <moveit_msgs/srv/get_position_ik.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -196,6 +197,11 @@ private:
 
     rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr   get_scene_;
     rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr apply_scene_;
+    rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr      compute_ik_;
+    /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
+    /// move_group's /compute_ik. Nothing if the service did not answer.
+    std::optional<bool> hasIk(const std::string& group, const std::string& link,
+                              const geometry_msgs::msg::Pose& pose);
 
     rclcpp_action::Server<Pick>::SharedPtr          pick_server_;
     rclcpp_action::Server<Place>::SharedPtr         place_server_;

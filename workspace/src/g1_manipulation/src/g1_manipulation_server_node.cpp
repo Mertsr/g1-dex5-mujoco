@@ -204,6 +204,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
 
     get_scene_   = create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
     apply_scene_ = create_client<moveit_msgs::srv::ApplyPlanningScene>("/apply_planning_scene");
+    // Reach checks go to move_group's IK service rather than an IK solver in this process: the
+    // solver plugin is configured, loaded and proven where the planning happens, and an
+    // in-process copy failed to instantiate here ("No kinematics solver instantiated").
+    compute_ik_ = create_client<moveit_msgs::srv::GetPositionIK>("/compute_ik");
 }
 
 bool G1ManipulationServer::allowHandContact(
@@ -364,21 +368,6 @@ void G1ManipulationServer::initialize()
     // walking, and a group this node does not build is a goal it rejects outright. It is only
     // ever driven to named postures here -- pose goals for it would need the subgroup IK map,
     // which is why g1.srdf deliberately gives it no kinematics entry.
-    // The IK solvers MoveGroupInterface runs IN THIS PROCESS (setJointValueTarget with a pose,
-    // which Pick uses to check reach before planning) are configured from
-    // robot_description_kinematics.<group>.*. The launch file passes them, but MoveIt's
-    // kinematics loader only reads parameters that are DECLARED, and this node does not declare
-    // overrides automatically -- so every IK call failed with "No kinematics solver instantiated
-    // for group 'left_arm'" and every grasp looked out of reach. Declared here, from whatever the
-    // launch passed, before the groups load the robot model.
-    for (const auto& [param, value] : get_node_parameters_interface()->get_parameter_overrides())
-    {
-        if (param.rfind("robot_description_kinematics.", 0) == 0 && !has_parameter(param))
-        {
-            declare_parameter(param, value);
-        }
-    }
-
     for (const std::string& name :
          { "left_arm", "right_arm", "both_arms", "left_hand", "right_hand" })
     {
@@ -696,6 +685,30 @@ G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::strin
     return it == groups_.end() ? nullptr : it->second.get();
 }
 
+std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
+                                                const geometry_msgs::msg::Pose& pose)
+{
+    if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
+    {
+        return std::nullopt;
+    }
+    auto request                          = std::make_shared<moveit_msgs::srv::GetPositionIK::Request>();
+    request->ik_request.group_name        = group;
+    request->ik_request.ik_link_name      = link;
+    request->ik_request.robot_state.is_diff = true;  // seeded from the current state
+    request->ik_request.avoid_collisions  = false;  // reach only; the planner checks collisions
+    request->ik_request.pose_stamped.header.frame_id = planning_frame_;
+    request->ik_request.pose_stamped.pose = pose;
+    request->ik_request.timeout           = rclcpp::Duration::from_seconds(0.05);
+    auto future = compute_ik_->async_send_request(request);
+    // Waited on without spinning, like the planning-scene calls: the executor owns this node.
+    if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready)
+    {
+        return std::nullopt;
+    }
+    return future.get()->error_code.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+}
+
 void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& goal_handle)
 {
     const auto goal     = goal_handle->get_goal();
@@ -786,6 +799,32 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         candidates.push_back({ "the bounding-box top grasp", std::nullopt });
     }
 
+    // Filled for whichever attempt's pregrasp is planned to.
+    ArmContext                              arm;
+    MoveGroup*                              arm_group  = nullptr;
+    MoveGroup*                              hand_group = nullptr;
+    std::string                             arm_name;
+    std::optional<geometry_msgs::msg::Pose> grasp_pose;
+    geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
+
+    // Every failure below leaves the hand open and nothing attached, so a retry starts from a
+    // defined state rather than part-way into a grasp. That is what makes the behavior tree's
+    // retry meaningful rather than a replay.
+    const auto fail = [&](const std::string& phase, const std::string& why) {
+        if (hand_group)
+        {
+            moveToNamed(*hand_group, "open");
+        }
+        if (arm_group)
+        {
+            arm_group->detachObject(object_id);
+            allowHandContact(arm, { "<octomap>", object_id }, false);
+        }
+        result->success = false;
+        result->message = phase + ": " + why;
+        goal_handle->abort(result);
+    };
+
     // The arms to try, in order. "auto": the hand on the side the grasp point is on first (the
     // planning frame is the pelvis, +y to the robot's left), then the other one.
     const auto arms_for = [&](double y) -> std::vector<std::string> {
@@ -834,29 +873,39 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         for (const GraspVariant& v :
              graspVariants(*c.pose, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_))
         {
+            if (static_cast<int>(attempts.size()) >= grasp_max_plans_)
+            {
+                break;  // enough reachable ones to plan to
+            }
             for (const std::string& a : arms_for(y))
             {
                 ArmContext ctx;
                 resolveArm(a, ctx);
-                MoveGroup* g = groupFor(ctx.arm_group);
                 Attempt    at{ c.name + v.suffix(), a, v.pose, handGoalFromGrasp(v.pose, ctx.is_left),
                                geometry_msgs::msg::Pose() };
                 at.pregrasp = backOff(at.grasp, grasp_approach_m_);
                 // Both ends of the straight-line approach must have an IK solution (collisions
                 // ignored here; the planner checks them).
-                g->setStartStateToCurrentState();
                 ++ik_checked;
-                const bool ok = g->setJointValueTarget(at.pregrasp, ctx.grasp_frame) &&
-                                g->setJointValueTarget(at.grasp, ctx.grasp_frame);
-                g->clearPoseTargets();
-                if (ok)
+                const auto grasp_ik = hasIk(ctx.arm_group, ctx.grasp_frame, at.grasp);
+                if (!grasp_ik)
+                {
+                    fail(Pick::Feedback::PHASE_PREGRASP,
+                         "move_group's /compute_ik did not answer; is move_group running?");
+                    return;
+                }
+                if (*grasp_ik && hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp).value_or(false))
                 {
                     attempts.push_back(at);
                     ++reachable_here;
                 }
+                if (static_cast<int>(attempts.size()) >= grasp_max_plans_)
+                {
+                    break;
+                }
             }
         }
-        if (reachable_here == 0)
+        if (reachable_here == 0 && static_cast<int>(attempts.size()) < grasp_max_plans_)
         {
             char where[160];
             std::snprintf(where, sizeof where, "%s: no tilt reachable by %s, grasp at pelvis (%.2f, %.2f, %.2f) m",
@@ -868,40 +917,6 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     RCLCPP_INFO(get_logger(), "pick %s: %zu reachable grasp poses out of %d IK checks",
                 object_id.c_str(), attempts.size(), ik_checked);
 
-    // Filled for whichever attempt's pregrasp is planned to.
-    ArmContext                              arm;
-    MoveGroup*                              arm_group  = nullptr;
-    MoveGroup*                              hand_group = nullptr;
-    std::string                             arm_name;
-    std::optional<geometry_msgs::msg::Pose> grasp_pose;
-    geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
-
-    // Every failure below leaves the hand open and nothing attached, so a retry starts from a
-    // defined state rather than part-way into a grasp. That is what makes the behavior tree's
-    // retry meaningful rather than a replay.
-    const auto fail = [&](const std::string& phase, const std::string& why) {
-        if (hand_group)
-        {
-            moveToNamed(*hand_group, "open");
-        }
-        if (arm_group)
-        {
-            arm_group->detachObject(object_id);
-            allowHandContact(arm, { "<octomap>", object_id }, false);
-        }
-        result->success = false;
-        result->message = phase + ": " + why;
-        goal_handle->abort(result);
-    };
-
-    if (attempts.empty() && ik_checked > 0 &&
-        !groupFor("right_arm")->getRobotModel()->getJointModelGroup("right_arm")->getSolverInstance())
-    {
-        fail(Pick::Feedback::PHASE_PREGRASP,
-             "this node has no IK solver for the arms, so reach cannot be checked: "
-             "robot_description_kinematics is not reaching g1_manipulation_server's parameters");
-        return;
-    }
     if (attempts.empty())
     {
         fail(Pick::Feedback::PHASE_PREGRASP,
