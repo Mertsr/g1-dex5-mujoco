@@ -644,14 +644,14 @@ void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const D
                             lines.colors.push_back(c);
                         }
                     };
-                    // Where the RH56E2 actually is in its grasp frame, open for a pinch (from the
-                    // hand's kinematics): the four fingers straight along x on the -y side, reaching
-                    // 0.11 m past the point; the thumb swung across to +y, 0.09 m out. Closing
-                    // brings both to the point.
-                    add(Eigen::Vector3f(-0.16f, 0.0f, 0.0f), Eigen::Vector3f(-0.05f, 0.0f, 0.0f), 1.0f, 0.85f, 0.1f);          // approach
-                    add(Eigen::Vector3f(-0.05f, -0.02f, 0.0f), Eigen::Vector3f(-0.05f, 0.09f, 0.0f), 0.9f, 0.9f, 0.9f);   // palm
-                    add(Eigen::Vector3f(-0.05f, -0.02f, 0.0f), Eigen::Vector3f(0.11f, -0.02f, 0.0f), 1.0f, 0.15f, 0.15f); // fingers
-                    add(Eigen::Vector3f(-0.05f, 0.09f, 0.0f), Eigen::Vector3f(0.02f, 0.09f, 0.0f), 0.2f, 0.4f, 1.0f);     // thumb
+                    // Where the RH56E2 actually is around the pinch point, in the pinch_open
+                    // shape it goes down in (from the hand's kinematics, see pinch_frame in
+                    // g1_description): the four fingertips 0.037 m past the point on the -y side,
+                    // 0.016 m out; the thumb tip on +y, 0.021 m out. Closing brings both to it.
+                    add(Eigen::Vector3f(-0.18f, 0.0f, 0.0f), Eigen::Vector3f(-0.08f, 0.0f, 0.0f), 1.0f, 0.85f, 0.1f);           // approach
+                    add(Eigen::Vector3f(-0.08f, -0.016f, 0.0f), Eigen::Vector3f(-0.08f, 0.021f, 0.0f), 0.9f, 0.9f, 0.9f);  // palm
+                    add(Eigen::Vector3f(-0.08f, -0.016f, 0.0f), Eigen::Vector3f(0.037f, -0.016f, 0.0f), 1.0f, 0.15f, 0.15f); // fingers
+                    add(Eigen::Vector3f(-0.08f, 0.021f, 0.0f), Eigen::Vector3f(-0.009f, 0.021f, 0.0f), 0.2f, 0.4f, 1.0f);   // thumb
                     add(Eigen::Vector3f(-0.012f, 0.0f, 0.0f), Eigen::Vector3f(0.012f, 0.0f, 0.0f), 0.0f, 0.9f, 0.9f);         // cross
                     add(Eigen::Vector3f(0.0f, -0.012f, 0.0f), Eigen::Vector3f(0.0f, 0.012f, 0.0f), 0.0f, 0.9f, 0.9f);
                     add(Eigen::Vector3f(0.0f, 0.0f, -0.012f), Eigen::Vector3f(0.0f, 0.0f, 0.012f), 0.0f, 0.9f, 0.9f);

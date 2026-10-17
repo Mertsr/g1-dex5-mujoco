@@ -64,3 +64,14 @@ mount:
 grasp_frame:
   left:  { xyz: "0.130 -0.032 0.006" }
   right: { xyz: "0.130  0.032 0.006" }
+
+# `{side}_hand_pinch_frame`: where the thumb tip meets the index fingertip, in the palm frame,
+# with the thumb swung across (thumb_1 = 1.2, as in the SRDF's pinch_open and closed) and the
+# fingers and thumb flexing together. COMPUTED from this URDF's own finger kinematics: tips meet
+# at about 70 % of "closed", 0.177 m out, 0.077 m to the curl side and 0.034 m toward the thumb
+# side. Published grasps (g1_perception's grasps on /objects) are pinches and are planned for
+# this frame; the bounding-box power grasp keeps grasp_frame. Measured against grasp_frame the
+# difference is 4.7 / 4.5 / 2.9 cm -- what made the pinch close beside the part, not on it.
+pinch_frame:
+  left:  { xyz: "0.177 -0.077 0.034" }
+  right: { xyz: "0.177  0.077 0.034" }

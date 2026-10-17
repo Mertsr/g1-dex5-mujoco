@@ -48,6 +48,7 @@ bool resolveArm(const std::string& arm, ArmContext& out)
     out.hand_group  = arm + "_hand";
     out.palm_link   = arm + "_hand_palm_link";
     out.grasp_frame = arm + "_hand_grasp_frame";
+    out.pinch_frame = arm + "_hand_pinch_frame";
     out.is_left     = arm == "left";
     return true;
 }
@@ -690,6 +691,16 @@ G1ManipulationServer::MoveGroup* G1ManipulationServer::groupFor(const std::strin
     return it == groups_.end() ? nullptr : it->second.get();
 }
 
+void G1ManipulationServer::usePinchFrame(ArmContext& arm)
+{
+    // Published grasps are pinches, aimed at where the thumb meets the index finger. Falls back
+    // to grasp_frame on a description without the pinch frame.
+    if (groupFor(arm.arm_group)->getRobotModel()->hasLinkModel(arm.pinch_frame))
+    {
+        arm.grasp_frame = arm.pinch_frame;
+    }
+}
+
 std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
                                                 const geometry_msgs::msg::Pose& pose,
                                                 std::map<std::string, double>* joints)
@@ -984,6 +995,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             {
                 ArmContext ctx;
                 resolveArm(a, ctx);
+                usePinchFrame(ctx);
                 Attempt    at{ c.name + v.suffix(), a, v.pose, handGoalFromGrasp(v.pose, ctx.is_left),
                                geometry_msgs::msg::Pose() };
                 at.pregrasp = backOff(at.grasp, grasp_approach_m_);
@@ -1056,6 +1068,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         ++planned;
         arm_name = at.arm;
         resolveArm(arm_name, arm);
+        if (at.grasp_pose)
+        {
+            usePinchFrame(arm);
+        }
         arm_group     = groupFor(arm.arm_group);
         hand_group    = groupFor(arm.hand_group);
         grasp_pose    = at.grasp_pose;
@@ -1282,6 +1298,10 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         result->message = "arm must be 'left', 'right' or 'auto', got '" + goal->arm + "'";
         goal_handle->abort(result);
         return;
+    }
+    if (grasp_T_object)
+    {
+        usePinchFrame(arm);  // it was picked at a published grasp, i.e. pinched
     }
     MoveGroup* arm_group  = groupFor(arm.arm_group);
     MoveGroup* hand_group = groupFor(arm.hand_group);

@@ -224,4 +224,17 @@
   <xacro:g1_grasp_frame side="left"/>
   <xacro:g1_grasp_frame side="right"/>
 
+  <!-- Where a thumb-to-index pinch closes. See pinch_frame in config/rh56e2_params.yaml. -->
+  <xacro:macro name="g1_pinch_frame" params="side">
+    <link name="${side}_hand_pinch_frame"/>
+    <joint name="${side}_hand_pinch_frame_joint" type="fixed">
+      <parent link="${side}_hand_palm_link"/>
+      <child link="${side}_hand_pinch_frame"/>
+      <origin xyz="${rh56e2_params.pinch_frame[side].xyz}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:g1_pinch_frame side="left"/>
+  <xacro:g1_pinch_frame side="right"/>
+
 </robot>

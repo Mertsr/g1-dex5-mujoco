@@ -56,6 +56,9 @@ struct ArmContext
     /// Where the hand actually closes. A frame in the URDF, so pose goals are given for it
     /// directly and nothing here does offset arithmetic.
     std::string grasp_frame;
+    /// Where a thumb-to-index pinch closes ({side}_hand_pinch_frame): published grasps are
+    /// planned for this one.
+    std::string pinch_frame;
     /// The two hands mirror, so the palm roll flips sign with this.
     bool is_left{ false };
 };
@@ -209,6 +212,8 @@ private:
     double octomap_refill_s_{ 1.0 };
     /// plan(), and on failure clear the octomap, let it refill and plan once more: a start
     /// state in collision with stale voxels otherwise blocks every move, including moving away.
+    /// For a published (pinch) grasp: plan for the pinch frame instead of grasp_frame.
+    void usePinchFrame(ArmContext& arm);
     bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
     bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
 
