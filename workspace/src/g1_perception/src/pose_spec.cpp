@@ -92,12 +92,31 @@ std::optional<FramedPose> parseFramedPose(const std::string& text, std::string& 
     return FramedPose{ t[0], *pose };
 }
 
+std::vector<Eigen::Isometry3f> combineSweeps(const std::vector<std::vector<Eigen::Isometry3f>>& sweeps)
+{
+    std::vector<Eigen::Isometry3f> out{ Eigen::Isometry3f::Identity() };
+    for (const auto& sweep : sweeps)
+    {
+        std::vector<Eigen::Isometry3f> next;
+        for (const auto& a : out)
+        {
+            for (const auto& b : sweep)
+            {
+                next.push_back(a * b);
+            }
+        }
+        out = std::move(next);
+    }
+    return out;
+}
+
 std::optional<std::vector<Eigen::Isometry3f>> parseSweep(const std::string& text, std::string& error)
 {
     const auto t = tokens(text);
-    if (t.size() != 4 || (t[0] != "x" && t[0] != "y" && t[0] != "z"))
+    const bool rotation = t.size() == 4 && (t[0] == "rx" || t[0] == "ry" || t[0] == "rz");
+    if (t.size() != 4 || (!rotation && t[0] != "x" && t[0] != "y" && t[0] != "z"))
     {
-        error = "'" + text + "': expected <x|y|z> start stop step";
+        error = "'" + text + "': expected <x|y|z|rx|ry|rz> start stop step";
         return std::nullopt;
     }
     float start, stop, step;
@@ -112,12 +131,20 @@ std::optional<std::vector<Eigen::Isometry3f>> parseSweep(const std::string& text
         error = "'" + text + "': " + std::to_string(n) + " steps; that many hypotheses would never finish";
         return std::nullopt;
     }
-    const int                      axis = t[0][0] - 'x';
+    const int                      axis = t[0].back() - 'x';
     std::vector<Eigen::Isometry3f> out;
     for (long i = 0; i < n; ++i)
     {
-        Eigen::Isometry3f T  = Eigen::Isometry3f::Identity();
-        T.translation()[axis] = start + step * static_cast<float>(i);
+        const float       v = start + step * static_cast<float>(i);
+        Eigen::Isometry3f T = Eigen::Isometry3f::Identity();
+        if (rotation)
+        {
+            T.linear() = Eigen::AngleAxisf(v, Eigen::Vector3f::Unit(axis)).toRotationMatrix();
+        }
+        else
+        {
+            T.translation()[axis] = v;
+        }
         out.push_back(T);
     }
     return out;

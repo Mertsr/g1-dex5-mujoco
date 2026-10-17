@@ -41,6 +41,9 @@ struct ObjectConfig
     ModelOptions            model;
     TrackerParams           params;
     std::vector<FramedPose> priors;  ///< frame = a world-reachable frame or another object's name
+    /// Each prior is also tried moved by each of these IN ITS PARENT FRAME (parent * g * prior):
+    /// "anywhere along the tray" rather than "along the part's own axes". Identity only by default.
+    std::vector<Eigen::Isometry3f> prior_grid{ Eigen::Isometry3f::Identity() };
     /// The pose reported for the object is world_T_model * model_T_output: the frame the rest
     /// of the stack calls this object's (its simulator body frame, a grasp frame), which need
     /// not be the frame its scan or CAD file happens to be authored in.

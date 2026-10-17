@@ -136,6 +136,11 @@ Per object, besides the model, priors and offsets:
 | `instances: N` | Track up to N of this part at once, as `<name>_1` .. `<name>_N`, sharing one loaded model. Pick with `object_id: <name>` takes the nearest. |
 | `region: "<frame> xmin xmax ymin ymax zmin zmax [max_angle_deg [roll pitch yaw]]"` | Where the object can be. A fit outside it is dropped and the object searched for again, never reported. The pallet's keeps it on its line. |
 | `instance_separation` | How close two instances' poses may be (default 0.05 m). |
+| `prior_sweeps: ["<x\|y\|z\|rx\|ry\|rz> start stop step", ...]` | Every prior also tried at every combination of these, in the part's own frame (a lean about its long axis). |
+| `prior_grid: [...]` | The same, in the prior's parent frame (slid along a tray or the pallet). |
+| `lock_min_coverage` | A search answer becomes a lock only if the depth confirms this much of its visible surface. Keeps a pose straddling two packed neighbours out. |
+| `search_interval_s` | How often a search may restart while the object is not tracked. |
+| `prior_jitter: "<m> <rad>"` | Every prior also tried +-m along and +-rad about each axis of the part. |
 
 **Swapping in scanned models.** Set `<object>.model` to the PLY, with `model_scale: 0.001` if it
 is in millimetres. PLY with faces is best, because normals then come from the faces and

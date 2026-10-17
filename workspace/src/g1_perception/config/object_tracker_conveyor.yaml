@@ -64,10 +64,20 @@ g1_object_tracker:
       # Each takes whichever prior below verifies and no other instance holds. Pick with
       # object_id "panel" takes the nearest one; "panel_3" a particular one.
       instances: 4
-      # A panel the hand nudged or tipped is no longer at its resting prior: every prior is also
-      # tried 2 cm off along each axis and turned 0.2 rad (11 degrees) about each. 13 fits per
-      # prior per search, on the search thread. A panel knocked over entirely is still not found.
-      prior_jitter: "0.02 0.2"
+      # A panel the hand nudged or tipped is no longer at its resting prior. Every prior is also
+      # tried slid -5..+5 cm along the tray / pallet (prior_grid, in the prior's own frame: odom
+      # or the pallet) and leaned -45..+45 degrees about the panel's long axis (prior_sweeps, in
+      # the panel's frame): 65 starts per prior, on the search thread, once every 0.5 s.
+      #
+      # A search answer only becomes a lock if the depth confirms 45 % of the panel's visible
+      # surface (lock_min_coverage). Panels packed side by side are the trap: a pose straddling
+      # two neighbours confirms ~30 % and passes every other check, the right one 47-77 %. Tested
+      # on renders of the tray with the panels knocked 10-35 degrees and 2-3 cm: all found, no
+      # wrong locks; without the coverage rule one wrong lock in three scenes.
+      prior_grid: ["x -0.05 0.05 0.025"]
+      prior_sweeps: ["rx -0.7854 0.7854 0.1309"]
+      lock_min_coverage: 0.45
+      search_interval_s: 0.5
       # The four nests, relative to the tracked pallet: wherever the pallet is, a panel seated in
       # nest k is here. Measured from the simulator with the panel settled in nest 1, then
       # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
