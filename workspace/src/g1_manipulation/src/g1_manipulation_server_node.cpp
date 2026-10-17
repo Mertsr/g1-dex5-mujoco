@@ -1206,6 +1206,39 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         return;
     }
 
+    // Where the hand really is versus where it was sent, both in the planning frame: the robot's
+    // measured joint states through TF on one side, the goal on the other. A large error with a
+    // successful plan means the arm did not follow the trajectory (or the robot model and the
+    // simulator disagree); a small one with the hand beside the part means the goal itself, i.e.
+    // the part's pose or the grasp, is off.
+    try
+    {
+        const auto t = tf_buffer_->lookupTransform(planning_frame_, arm.grasp_frame, tf2::TimePointZero,
+                                                   tf2::durationFromSec(0.5));
+        const double ex = t.transform.translation.x - grasp_goal.position.x;
+        const double ey = t.transform.translation.y - grasp_goal.position.y;
+        const double ez = t.transform.translation.z - grasp_goal.position.z;
+        RCLCPP_INFO(get_logger(),
+                    "pick %s: %s at pelvis (%.3f, %.3f, %.3f), goal (%.3f, %.3f, %.3f): off by %.1f mm",
+                    object_id.c_str(), arm.grasp_frame.c_str(), t.transform.translation.x,
+                    t.transform.translation.y, t.transform.translation.z, grasp_goal.position.x,
+                    grasp_goal.position.y, grasp_goal.position.z, 1000.0 * std::sqrt(ex * ex + ey * ey + ez * ez));
+    }
+    catch (const tf2::TransformException& e)
+    {
+        RCLCPP_WARN(get_logger(), "pick %s: no TF for %s: %s", object_id.c_str(), arm.grasp_frame.c_str(), e.what());
+    }
+    if (const auto seen = lookUpObject(object_id))
+    {
+        const std::string f = seen->header.frame_id.empty() ? object_frame : seen->header.frame_id;
+        if (const auto p = toPlanningFrame(seen->results.front().pose.pose, f))
+        {
+            RCLCPP_INFO(get_logger(), "pick %s: part now at pelvis (%.3f, %.3f, %.3f), aimed at (%.3f, %.3f, %.3f)",
+                        object_id.c_str(), p->position.x, p->position.y, p->position.z, aimed_object_pose.position.x,
+                        aimed_object_pose.position.y, aimed_object_pose.position.z);
+        }
+    }
+
     feedback->phase = Pick::Feedback::PHASE_GRASP;
     goal_handle->publish_feedback(feedback);
     if (!moveToNamed(*hand_group, "closed"))
