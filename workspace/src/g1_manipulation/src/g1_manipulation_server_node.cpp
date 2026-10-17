@@ -203,7 +203,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
     // it before re-planning (the updaters run at up to 5 Hz).
     octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
-    grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", -1.0);
+    grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(

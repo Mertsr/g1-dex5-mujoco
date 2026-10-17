@@ -71,7 +71,7 @@ result:
   `grasp_tilt_max_deg` (15) in `grasp_tilt_step_deg` (15) steps, and turned over if
   `grasp_allow_flip` (off: a turned-over hand twists the wrist into odd postures), and leaned up to
   `grasp_lean_max_deg` (60) about the grasp's z. Tilts whose fingers do not come down by at least
-  `grasp_min_descent` (off by default, -1) are dropped. The nearest to the published pose is tried first. Every variant is checked with IK for both arms
+  `grasp_min_descent` (0.25, the z of the approach direction: no side approaches) are dropped. The nearest to the published pose is tried first. Every variant is checked with IK for both arms
   under `arm: auto`, nearest side first. The published tilt is tried first, then the nearest ones,
   and at most `grasp_max_plans` (6) reachable ones are planned to.
 
