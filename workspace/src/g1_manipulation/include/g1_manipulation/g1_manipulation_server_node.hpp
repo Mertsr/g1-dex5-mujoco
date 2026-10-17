@@ -80,6 +80,7 @@ geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double di
 struct GraspVariant
 {
     double                   tilt{ 0.0 };
+    double                   lean{ 0.0 };  ///< set by Pick: turned about the grasp's z first
     bool                     flipped{ false };
     geometry_msgs::msg::Pose pose;
     /// " (tilt +30 deg, turned over)", or "" for the grasp as published.
@@ -242,6 +243,7 @@ private:
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
     double grasp_tilt_step_rad_{ M_PI / 12 };
     bool   grasp_allow_flip_{ true };
+    double grasp_lean_max_rad_{ M_PI / 3 };
     double grasp_min_descent_{ 0.25 };
     int    grasp_max_plans_{ 6 };  ///< IK-reachable grasps planned to before giving up
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.

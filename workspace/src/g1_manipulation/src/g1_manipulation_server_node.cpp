@@ -83,12 +83,13 @@ geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double di
 
 std::string GraspVariant::suffix() const
 {
-    if (std::abs(tilt) < 1e-6 && !flipped)
+    if (std::abs(tilt) < 1e-6 && std::abs(lean) < 1e-6 && !flipped)
     {
         return "";
     }
-    char buf[48];
-    std::snprintf(buf, sizeof buf, " (tilt %+.0f deg%s)", tilt * 180.0 / M_PI, flipped ? ", turned over" : "");
+    char buf[80];
+    std::snprintf(buf, sizeof buf, " (tilt %+.0f deg, lean %+.0f deg%s)", tilt * 180.0 / M_PI, lean * 180.0 / M_PI,
+                  flipped ? ", turned over" : "");
     return buf;
 }
 
@@ -197,6 +198,8 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_tilt_max_rad_  = declare_parameter<double>("grasp_tilt_max_deg", 15.0) * M_PI / 180.0;
     grasp_tilt_step_rad_ = declare_parameter<double>("grasp_tilt_step_deg", 15.0) * M_PI / 180.0;
     grasp_allow_flip_    = declare_parameter<bool>("grasp_allow_flip", false);
+    // ... and leaned about the pinched edge (the grasp's z) by up to this much.
+    grasp_lean_max_rad_  = declare_parameter<double>("grasp_lean_max_deg", 60.0) * M_PI / 180.0;
     // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
     // it before re-planning (the updaters run at up to 5 Hz).
     octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
@@ -977,8 +980,32 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         int reachable_here = 0;
         // Most vertical first: the hand comes down onto the edge from above when it can, and
         // tips only as far as reach needs.
-        auto variants =
-            graspVariants(*c.pose, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_);
+        // Also leaned about the grasp's z, the axis along the edge being pinched: the hand comes
+        // in over the edge at an angle instead of straight down, as a person reaching for the far
+        // side of a box does. Straight down needs the wrist right above the point, which costs
+        // the arm 15-20 cm of reach; leaned, the fingers reach out to it.
+        std::vector<double> leans{ 0.0 };
+        for (double l = grasp_tilt_step_rad_; l <= grasp_lean_max_rad_ + 1e-9 && grasp_tilt_step_rad_ > 1e-6;
+             l += grasp_tilt_step_rad_)
+        {
+            leans.push_back(l);
+            leans.push_back(-l);
+        }
+        std::vector<GraspVariant> variants;
+        for (const double lean : leans)
+        {
+            geometry_msgs::msg::Pose leaned = *c.pose;
+            tf2::Quaternion          q, rz;
+            tf2::fromMsg(leaned.orientation, q);
+            rz.setRPY(0.0, 0.0, lean);
+            leaned.orientation = tf2::toMsg((q * rz).normalized());
+            for (GraspVariant v :
+                 graspVariants(leaned, grasp_tilt_max_rad_, grasp_tilt_step_rad_, grasp_allow_flip_, grasp_min_descent_))
+            {
+                v.lean = lean;
+                variants.push_back(v);
+            }
+        }
         std::stable_sort(variants.begin(), variants.end(), [](const GraspVariant& a, const GraspVariant& b) {
             tf2::Quaternion qa, qb;
             tf2::fromMsg(a.pose.orientation, qa);
