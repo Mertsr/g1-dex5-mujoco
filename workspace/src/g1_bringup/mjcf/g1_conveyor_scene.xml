@@ -188,6 +188,25 @@
       pos="1.83 -1.26 0.74" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_wall_y_max" group="2" type="box" size="0.34 0.01 0.03"
       pos="1.83 -0.34 0.74" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <!-- The tray's panels weigh 0.3 kg (a moulded panel this size), not the 0.05 kg of the
+         others: at 0.05 kg a fingertip's brush slid them by up to 16 cm. With these stops and
+         that mass, 2-3 N pushes in every direction move them under 5 mm (pushed in the
+         simulator: 30-157 mm and 7 degrees before).
+
+         Stops holding the four panels where they rest, so a hand brushing one does not slide or
+         tip it out of place (and out of the tracker's priors): low bars, 15 mm tall and 4 mm
+         thick, on the tray floor (top at 0.71). Across x they sit in the gaps between the
+         panels' bottom edges -- 29 mm wide at the floor, closing to 3 mm at the panels' tops,
+         which is why they stay low -- and in front of the first and behind the last panel;
+         along y one at each end of the panels (which span y -1.100 .. -0.503). Positions are
+         the settled panels' measured extents. -->
+    <geom name="tray_stop_x0" group="2" type="box" size="0.002 0.30 0.0075" pos="1.528 -0.80 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_x1" group="2" type="box" size="0.002 0.30 0.0075" pos="1.6695 -0.80 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_x2" group="2" type="box" size="0.002 0.30 0.0075" pos="1.8195 -0.80 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_x3" group="2" type="box" size="0.002 0.30 0.0075" pos="1.9695 -0.80 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_x4" group="2" type="box" size="0.002 0.30 0.0075" pos="2.111 -0.80 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_y0" group="2" type="box" size="0.30 0.002 0.0075" pos="1.82 -1.106 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
+    <geom name="tray_stop_y1" group="2" type="box" size="0.30 0.002 0.0075" pos="1.82 -0.497 0.7175" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_leg_1" group="2" type="box" size="0.02 0.02 0.3475"
       pos="2.15 -1.23 0.3475" material="pedestal_mat" contype="1" conaffinity="1"/>
     <geom name="tray_leg_2" group="2" type="box" size="0.02 0.02 0.3475"
@@ -457,7 +476,7 @@
          other over several seconds in a now-crowded tray. -->
     <body name="part_tray_1" pos="1.605 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_1_joint" damping="0.2"/>
-      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.3"
         contype="0" conaffinity="0"/>
       <geom group="3" type="mesh" mesh="part_col_shell" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
@@ -468,7 +487,7 @@
     </body>
     <body name="part_tray_2" pos="1.755 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_2_joint" damping="0.2"/>
-      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.3"
         contype="0" conaffinity="0"/>
       <geom group="3" type="mesh" mesh="part_col_shell" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
@@ -479,7 +498,7 @@
     </body>
     <body name="part_tray_3" pos="1.905 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_3_joint" damping="0.2"/>
-      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.3"
         contype="0" conaffinity="0"/>
       <geom group="3" type="mesh" mesh="part_col_shell" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
@@ -490,7 +509,7 @@
     </body>
     <body name="part_tray_4" pos="2.055 -0.80 0.759" euler="-1.5708 1.57 0">
       <joint type="free" name="part_tray_4_joint" damping="0.2"/>
-      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.05"
+      <geom group="2" type="mesh" mesh="part_mesh" material="mat_part" mass="0.3"
         contype="0" conaffinity="0"/>
       <geom group="3" type="mesh" mesh="part_col_shell" density="0" rgba="0.9 0.4 0.3 0.4"
         contype="1" conaffinity="1" friction="1 0.01 0.0001"/>
