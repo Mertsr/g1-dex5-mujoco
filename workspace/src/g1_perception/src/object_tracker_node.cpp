@@ -1,5 +1,7 @@
 #include "g1_perception/object_tracker_node.hpp"
 
+#include <sstream>
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
 #include <geometry_msgs/msg/pose.hpp>
@@ -213,6 +215,37 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
         if (c.params.prior_offsets.empty())
         {
             c.params.prior_offsets.push_back(Eigen::Isometry3f::Identity());
+        }
+        // "<metres> <radians>": every prior offset is also tried shifted by +-metres along each
+        // of the model's axes and turned by +-radians about each -- a part nudged or tipped from
+        // where it was put. 12 more fits per offset, so keep it for parts that get disturbed.
+        const auto jitter = declare_parameter<std::string>(name + ".prior_jitter", "");
+        if (!jitter.empty())
+        {
+            std::istringstream in(jitter);
+            float              t = 0.0f, r = 0.0f;
+            if (!(in >> t >> r) || t < 0.0f || r < 0.0f)
+            {
+                throw std::runtime_error(name + ".prior_jitter: expected '<metres> <radians>', got '" + jitter + "'");
+            }
+            std::vector<Eigen::Isometry3f> jittered;
+            for (const auto& base : c.params.prior_offsets)
+            {
+                jittered.push_back(base);
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    for (const float sign : { -1.0f, 1.0f })
+                    {
+                        Eigen::Isometry3f shift = Eigen::Isometry3f::Identity();
+                        shift.translation()[axis] = sign * t;
+                        jittered.push_back(base * shift);
+                        Eigen::Isometry3f turn = Eigen::Isometry3f::Identity();
+                        turn.linear() = Eigen::AngleAxisf(sign * r, Eigen::Vector3f::Unit(axis)).toRotationMatrix();
+                        jittered.push_back(base * turn);
+                    }
+                }
+            }
+            c.params.prior_offsets = std::move(jittered);
         }
         const auto output = declare_parameter<std::string>(name + ".output_offset", "0 0 0");
         const auto o      = parsePose(output, error);

@@ -64,6 +64,10 @@ g1_object_tracker:
       # Each takes whichever prior below verifies and no other instance holds. Pick with
       # object_id "panel" takes the nearest one; "panel_3" a particular one.
       instances: 4
+      # A panel the hand nudged or tipped is no longer at its resting prior: every prior is also
+      # tried 2 cm off along each axis and turned 0.2 rad (11 degrees) about each. 13 fits per
+      # prior per search, on the search thread. A panel knocked over entirely is still not found.
+      prior_jitter: "0.02 0.2"
       # The four nests, relative to the tracked pallet: wherever the pallet is, a panel seated in
       # nest k is here. Measured from the simulator with the panel settled in nest 1, then
       # stepped by the 150.6 mm pitch. For a panel in the hand, add a prior on the palm frame,
