@@ -244,7 +244,7 @@ private:
     double grasp_tilt_step_rad_{ M_PI / 12 };
     bool   grasp_allow_flip_{ true };
     double grasp_lean_max_rad_{ M_PI / 3 };
-    double grasp_min_descent_{ 0.25 };
+    double grasp_min_descent_{ -1.0 };
     int    grasp_max_plans_{ 6 };  ///< IK-reachable grasps planned to before giving up
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.

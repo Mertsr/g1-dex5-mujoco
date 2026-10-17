@@ -203,7 +203,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
     // it before re-planning (the updaters run at up to 5 Hz).
     octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
-    grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
+    grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", -1.0);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
@@ -978,8 +978,6 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             continue;
         }
         int reachable_here = 0;
-        // Most vertical first: the hand comes down onto the edge from above when it can, and
-        // tips only as far as reach needs.
         // Also leaned about the grasp's z, the axis along the edge being pinched: the hand comes
         // in over the edge at an angle instead of straight down, as a person reaching for the far
         // side of a box does. Straight down needs the wrist right above the point, which costs
@@ -1006,11 +1004,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 variants.push_back(v);
             }
         }
+        // Nearest to the grasp as published first: it is the one specified, the others are only
+        // there for reach.
         std::stable_sort(variants.begin(), variants.end(), [](const GraspVariant& a, const GraspVariant& b) {
-            tf2::Quaternion qa, qb;
-            tf2::fromMsg(a.pose.orientation, qa);
-            tf2::fromMsg(b.pose.orientation, qb);
-            return tf2::Matrix3x3(qa).getColumn(0).z() < tf2::Matrix3x3(qb).getColumn(0).z();
+            return std::abs(a.tilt) + std::abs(a.lean) < std::abs(b.tilt) + std::abs(b.lean);
         });
         for (const GraspVariant& v : variants)
         {
