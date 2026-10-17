@@ -182,7 +182,12 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_rpy_ = declare_parameter<std::vector<double>>("grasp_rpy", { -M_PI_2, 0.0, 0.0 });
     // For objects that publish their own grasp ("<object>/grasp/<name>" on /objects): the hand
     // goes to a point this far back along the grasp's approach axis, then straight in.
-    grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.12);
+    // 0.20, not less: the RH56E2's straight fingers reach 0.11 m past its grasp point, so a
+    // shorter stand-off puts the fingertips at the part's top already at the pregrasp, and the
+    // transit there drags them across it.
+    grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.20);
+    // Re-aiming before the descent follows a part this far at most; further, it was knocked.
+    reaim_max_shift_m_   = declare_parameter<double>("reaim_max_shift_m", 0.04);
     locate_timeout_s_    = declare_parameter<double>("locate_timeout_s", 3.0);
     linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
     // A published grasp is tried turned about its closing axis by up to this much, in these
@@ -843,6 +848,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         abort_locating("could not transform the object pose");
         return;
     }
+    // Where the grasp is aimed at, updated if the part is seen to move before the descent.
+    geometry_msgs::msg::Pose aimed_object_pose = *object_pose;
     // An object that publishes its own grasps ("<object>/grasp/<name>", from g1_perception's
     // tracker) is taken at one of them, straight in along the grasp's approach axis. Anything
     // else gets the top grasp graspFrameGoal() builds from its bounding box.
@@ -1028,8 +1035,12 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         return;
     }
 
+    // The box goes where the detection's bounding box is: for a part whose own frame is not at
+    // its middle (the panel's body frame is not), the object pose would put the box off to one
+    // side and leave part of the panel uncovered for the planner to swing the hand through.
+    const auto box_pose = toPlanningFrame(detection->bbox.center, object_frame);
     const moveit_msgs::msg::CollisionObject object =
-        publishCollisionObject(*detection, *object_pose);
+        publishCollisionObject(*detection, box_pose && (detection->bbox.size.x > 0.0) ? *box_pose : *object_pose);
 
     feedback->phase = Pick::Feedback::PHASE_PREGRASP;
     goal_handle->publish_feedback(feedback);
@@ -1109,6 +1120,43 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     allowHandContact(arm, { "<octomap>" }, true);
     planning_scene_.removeCollisionObjects({ object_id });
 
+    // Re-aimed at where the part is NOW, not where it was when the pick started: the tracker
+    // keeps measuring it while the arm moves, and a part nudged on the way in (or simply seen
+    // better from closer) moves the grasp with it. A part that moved a lot was knocked, and
+    // grasping at a guess would knock it further.
+    if (grasp_pose)
+    {
+        if (const auto fresh = lookUpObject(object_id))
+        {
+            const std::string fresh_frame =
+                fresh->header.frame_id.empty() ? object_frame : fresh->header.frame_id;
+            if (const auto now_pose = toPlanningFrame(fresh->results.front().pose.pose, fresh_frame))
+            {
+                tf2::Transform then_T, now_T, grasp_T;
+                tf2::fromMsg(aimed_object_pose, then_T);
+                tf2::fromMsg(*now_pose, now_T);
+                const tf2::Transform moved = now_T * then_T.inverse();
+                const double         shift = moved.getOrigin().length();
+                const double         turn  = moved.getRotation().getAngle();
+                if (shift > reaim_max_shift_m_)
+                {
+                    fail(Pick::Feedback::PHASE_APPROACH,
+                         "the part moved " + std::to_string(static_cast<int>(shift * 1000)) +
+                             " mm since the pick started (knocked?); not grasping at a guess");
+                    return;
+                }
+                if (shift > 0.003 || turn > 0.02)
+                {
+                    RCLCPP_INFO(get_logger(), "pick %s: part moved %.1f mm / %.1f deg; re-aiming the grasp",
+                                object_id.c_str(), shift * 1000.0, turn * 180.0 / M_PI);
+                    tf2::fromMsg(grasp_goal, grasp_T);
+                    tf2::toMsg(moved * grasp_T, grasp_goal);
+                    aimed_object_pose = *now_pose;
+                }
+            }
+        }
+    }
+
     // Straight in for a published grasp: the parts beside it are close, and a free-space plan
     // may swing the fingers through them.
     if (!(grasp_pose ? moveLinear(*arm_group, grasp_goal, arm.grasp_frame, "approach")
@@ -1178,7 +1226,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     {
         tf2::Transform world_T_grasp, world_T_object;
         tf2::fromMsg(grasp_goal, world_T_grasp);
-        tf2::fromMsg(*object_pose, world_T_object);
+        tf2::fromMsg(aimed_object_pose, world_T_object);
         std::lock_guard<std::mutex> lock(held_mutex_);
         held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
         held_arm_[object_id]   = arm_name;

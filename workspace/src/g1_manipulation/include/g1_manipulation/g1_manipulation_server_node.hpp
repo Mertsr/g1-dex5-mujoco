@@ -230,7 +230,8 @@ private:
     std::vector<double> grasp_rpy_;
 
     // Object grasps published with the object pose (see handGoalFromGrasp).
-    double grasp_approach_m_{ 0.12 };  ///< straight-line approach and retreat length
+    double grasp_approach_m_{ 0.20 };  ///< straight-line approach and retreat length
+    double reaim_max_shift_m_{ 0.04 };  ///< how far a part may move before the descent and still be followed
     double linear_min_fraction_{ 0.95 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
