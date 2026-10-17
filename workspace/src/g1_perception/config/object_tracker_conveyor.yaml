@@ -52,10 +52,10 @@ g1_object_tracker:
       # puts the held panel exactly there. Same measurement as the panel's nest priors below,
       # carried from the STL frame to the body frame.
       slots:
-        - "nest_1  0.2262 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "nest_2  0.0756 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "nest_3 -0.0750 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "nest_4 -0.2256 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "nest_1  0.2256 0.0 0.0755 -1.5394 0.0022 -1.5712"
+        - "nest_2  0.0750 0.0 0.0755 -1.5394 0.0022 -1.5712"
+        - "nest_3  -0.0756 0.0 0.0755 -1.5394 0.0022 -1.5712"
+        - "nest_4  -0.2262 0.0 0.0755 -1.5394 0.0022 -1.5712"
 
     panel:
       model: package://g1_perception/models/bsh_panel.stl
@@ -76,18 +76,18 @@ g1_object_tracker:
       # Then the tray beside the line (the scene's part_tray_1..4, in odom), AS THEY REST: on a
       # flat tray a panel tips 15.8 degrees onto its clips and drops 23 mm, which put the
       # as-authored poses outside what a prior search can pull in. Measured by settling the scene,
-      # then lowered 4 cm with the tray.
+      # then lowered 4 cm with the tray; re-measured with the decomposed collision (64 hulls).
       # Several priors in view at once is fine: each instance keeps the one the depth confirms
       # best among those no other instance holds.
       priors:
-        - "odom 1.6397 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
-        - "odom 1.7897 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
-        - "odom 1.9397 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
-        - "odom 2.0897 -0.8005 0.7510 -1.2955 0.0057 -1.5589"
-        - "pallet  0.2722 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "pallet  0.1216 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "pallet -0.0290 0.0 0.0614 -1.5930 -0.0006 -1.5700"
-        - "pallet -0.1796 0.0 0.0614 -1.5930 -0.0006 -1.5700"
+        - "odom 1.6415 -0.8006 0.7519 -1.2924 0.0041 -1.5617"
+        - "odom 1.7885 -0.7999 0.7528 -1.2541 -0.0052 -1.5579"
+        - "odom 1.9385 -0.7999 0.7528 -1.2541 -0.0052 -1.5579"
+        - "odom 2.0879 -0.7998 0.7528 -1.2541 -0.0052 -1.5561"
+        - "pallet 0.2715 0.0 0.0780 -1.5394 0.0022 -1.5712"
+        - "pallet 0.1209 0.0 0.0780 -1.5394 0.0022 -1.5712"
+        - "pallet -0.0297 0.0 0.0780 -1.5394 0.0022 -1.5712"
+        - "pallet -0.1803 0.0 0.0780 -1.5394 0.0022 -1.5712"
       # The STL's frame differs from the scene's part body by the mesh refpos (0, 0.001,
       # -0.046): report the body frame, so the skills see the same frame from this source as
       # from simulator ground truth.
