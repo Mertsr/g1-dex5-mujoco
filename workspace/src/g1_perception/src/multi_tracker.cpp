@@ -1,6 +1,5 @@
 #include "g1_perception/multi_tracker.hpp"
 
-#include <algorithm>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -174,13 +173,10 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
             {
                 if (const auto parent = world_T(p.frame))
                 {
-                    for (const auto& g : o.config.prior_grid)
+                    const Eigen::Isometry3f world_T_prior = *parent * p.pose;
+                    if (!held_by_sibling(o, world_T_prior.translation()))
                     {
-                        const Eigen::Isometry3f world_T_prior = *parent * g * p.pose;
-                        if (!held_by_sibling(o, world_T_prior.translation()))
-                        {
-                            ctx.priors.push_back(cam_T_world * world_T_prior);
-                        }
+                        ctx.priors.push_back(cam_T_world * world_T_prior);
                     }
                 }
             }
@@ -215,19 +211,11 @@ std::vector<MultiTracker::Result> MultiTracker::update(const DepthImage& depth, 
         r.box_size     = o.box_size;
         if (debug_ && r.out.state == ObjectTracker::State::kSearching)
         {
-            // Every pose the search tries, thinned to at most ~200 so a gridded search stays readable.
-            const std::size_t total =
-                ctx.priors.size() * std::max<std::size_t>(1, o.tracker->params().prior_offsets.size());
-            const std::size_t every = std::max<std::size_t>(1, total / 200);
-            std::size_t       n     = 0;
             for (const auto& prior : ctx.priors)
             {
                 for (const auto& off : o.tracker->params().prior_offsets)
                 {
-                    if (n++ % every == 0)
-                    {
-                        r.hypotheses.push_back(prior * off);
-                    }
+                    r.hypotheses.push_back(prior * off);
                 }
             }
         }

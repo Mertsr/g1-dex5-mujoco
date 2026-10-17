@@ -11,10 +11,9 @@
  *   "x y z [roll pitch yaw]"           an unframed pose (offsets)
  *   "<frame> xmin xmax ymin ymax zmin zmax [max_angle_deg [roll pitch yaw]]"
  *                                      a region an object must stay in (see Region)
- *   "<axis> start stop step"           a sweep of translations along x, y or z, or rotations
- *                                      (radians) about rx, ry or rz (both ends included), for an
- *                                      object whose position along a known axis is unknown -- a
- *                                      pallet somewhere on its line, a panel leaning either way
+ *   "<axis> start stop step"           a sweep of translations along x, y or z (both ends
+ *                                      included), for an object whose position along a known
+ *                                      axis is unknown -- a pallet somewhere on its line
  *
  * One string per pose, because ROS 2 parameters cannot hold a list of structures, and a list of
  * strings reads in the YAML much like the poses it holds. No ROS.
@@ -57,12 +56,8 @@ std::optional<Eigen::Isometry3f> parsePose(const std::string& text, std::string&
 /// "<frame> x y z [roll pitch yaw]".
 std::optional<FramedPose> parseFramedPose(const std::string& text, std::string& error);
 
-/// "<axis> start stop step" -> translations (x|y|z) or rotations (rx|ry|rz); nothing on a
-/// malformed or runaway (> 10000) sweep.
+/// "<axis> start stop step" -> translations; nothing on a malformed or runaway (> 10000) sweep.
 std::optional<std::vector<Eigen::Isometry3f>> parseSweep(const std::string& text, std::string& error);
-
-/// Every combination of one pose from each sweep, composed left to right.
-std::vector<Eigen::Isometry3f> combineSweeps(const std::vector<std::vector<Eigen::Isometry3f>>& sweeps);
 
 Eigen::Isometry3f poseFromXyzRpy(float x, float y, float z, float roll, float pitch, float yaw);
 

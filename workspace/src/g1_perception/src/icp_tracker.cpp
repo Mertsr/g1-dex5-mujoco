@@ -480,7 +480,7 @@ void ObjectTracker::startPriorSearch(const DepthImage& depth, const Intrinsics& 
                     continue;  // nothing like it here; skip the second pass
                 }
                 o = fit(*model, params, params.icp_track, frame->view, k, o.cam_T_model, others);
-                if (o.valid && o.score.coverage >= params.lock_min_coverage && quality(o.score) > best_q)
+                if (o.valid && quality(o.score) > best_q)
                 {
                     best_q = quality(o.score);
                     best   = o.cam_T_model;
@@ -521,7 +521,7 @@ void ObjectTracker::startGlobalSearch(const DepthImage& depth, const Intrinsics&
             }
             Output o = fit(*model, params, params.icp, frame->view, k, *g, others);
             o        = fit(*model, params, params.icp_track, frame->view, k, o.cam_T_model, others);
-            if (o.valid && o.score.coverage >= params.lock_min_coverage && quality(o.score) > best_q)
+            if (o.valid && quality(o.score) > best_q)
             {
                 best_q = quality(o.score);
                 best   = o.cam_T_model;
@@ -553,7 +553,7 @@ bool ObjectTracker::collect(Search& search, double stamp_then, const DepthImage&
         }
     }
     out = fit(*model_, params_, params_.icp_track, depth, k, init, ctx.others);
-    return out.valid && out.score.coverage >= params_.lock_min_coverage;
+    return out.valid;
 }
 
 ObjectTracker::Output ObjectTracker::update(const DepthImage& depth, const Intrinsics& k, const FrameContext& ctx)

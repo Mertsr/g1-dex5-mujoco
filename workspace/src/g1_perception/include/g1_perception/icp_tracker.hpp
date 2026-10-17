@@ -184,11 +184,6 @@ struct TrackerParams
     int   min_in_box      = 150;    ///< ... with at least this many points actually on it ...
     float min_coverage    = 0.25f;  ///< ... the depth confirming this much of its visible surface ...
     float max_violation   = 0.12f;  ///< ... and seeing past it at no more than this much
-    /// A search's answer must also confirm this much of the visible surface before it becomes a
-    /// lock. Stricter than min_coverage, which keeps a lock through a hand covering the part:
-    /// among parts packed side by side a pose straddling two neighbours confirms ~0.3 and passes
-    /// the rest, the right pose confirms 0.55 and more.
-    float lock_min_coverage = 0.0f;
     float free_space_tol  = 0.015f;
     int   lost_after      = 5;      ///< consecutive bad frames before searching again
     int   search_stride   = 2;      ///< pixel stride for the global-search cloud

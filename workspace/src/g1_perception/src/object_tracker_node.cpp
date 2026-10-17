@@ -212,36 +212,6 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
             }
             c.params.prior_offsets.insert(c.params.prior_offsets.end(), s->begin(), s->end());
         }
-        // Several sweeps, every combination: in the part's own frame (prior_sweeps, e.g. a lean
-        // about its long axis) and in the prior's parent frame (prior_grid, e.g. anywhere along
-        // a tray). Each "<x|y|z|rx|ry|rz> start stop step".
-        const auto read_sweeps = [&](const std::string& key) {
-            std::vector<std::vector<Eigen::Isometry3f>> sweeps;
-            for (const auto& spec :
-                 declare_parameter<std::vector<std::string>>(name + "." + key, std::vector<std::string>{}))
-            {
-                const auto sw = parseSweep(spec, error);
-                if (!sw)
-                {
-                    throw std::runtime_error(name + "." + key + ": " + error);
-                }
-                sweeps.push_back(*sw);
-            }
-            return sweeps;
-        };
-        if (const auto own = read_sweeps("prior_sweeps"); !own.empty())
-        {
-            const auto combined = combineSweeps(own);
-            c.params.prior_offsets.insert(c.params.prior_offsets.end(), combined.begin(), combined.end());
-        }
-        if (const auto grid = read_sweeps("prior_grid"); !grid.empty())
-        {
-            c.prior_grid = combineSweeps(grid);
-        }
-        c.params.lock_min_coverage =
-            static_cast<float>(declare_parameter<double>(name + ".lock_min_coverage", c.params.lock_min_coverage));
-        c.params.search_interval_s =
-            declare_parameter<double>(name + ".search_interval_s", c.params.search_interval_s);
         if (c.params.prior_offsets.empty())
         {
             c.params.prior_offsets.push_back(Eigen::Isometry3f::Identity());

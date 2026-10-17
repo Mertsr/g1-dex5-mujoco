@@ -459,18 +459,3 @@ TEST_F(Tracker, InstancesTakeDifferentParts)
     EXPECT_NEAR(apart, 0.15, 0.003);
     EXPECT_EQ(&mt.model(0), &mt.model(1));  // loaded once
 }
-
-TEST(PoseSpec, RotationSweepsAndCombinations)
-{
-    std::string err;
-    const auto  lean = parseSweep("rx -0.5 0.5 0.25", err);
-    ASSERT_TRUE(lean) << err;
-    ASSERT_EQ(lean->size(), 5u);
-    EXPECT_NEAR(Eigen::AngleAxisf(lean->front().linear()).angle(), 0.5f, 1e-5f);
-    EXPECT_TRUE(lean->front().translation().isZero());
-    const auto slide = parseSweep("x -0.05 0.05 0.025", err);
-    ASSERT_TRUE(slide);
-    const auto all = combineSweeps({ *slide, *lean });
-    EXPECT_EQ(all.size(), 25u);
-    EXPECT_FALSE(parseSweep("rw 0 1 0.1", err));
-}
