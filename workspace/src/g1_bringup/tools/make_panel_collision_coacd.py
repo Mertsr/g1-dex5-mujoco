@@ -10,6 +10,13 @@ leave the windows and the space under the edge flange open, and keep the clips s
 
     pip install coacd trimesh          # once
     make_panel_collision_coacd.py --stl /path/to/BSH_panel.stl [--hulls 64] [--threshold 0.03]
+                                  [--preprocess-resolution 250]
+
+--preprocess-resolution matters most for this part. The STL is not watertight, so CoACD first
+remeshes it on a voxel grid of this many cells across its longest side: the default 50 is
+1.2 cm voxels on a 0.6 m panel, which thickens its 3 mm walls into slabs and fills the windows'
+edges, the boss recess and the space under the top skin. 250 (about 2.4 mm) keeps them: the
+top surface then matches the mesh to ~1.4 mm instead of ~4.7 mm.
 
 Rewrites, in g1_conveyor_scene.xml: the generated <mesh> block inside <asset> (part_col_0 ..
 part_col_N-1, inline vertices in the PANEL BODY frame, i.e. STL minus the mesh refpos), and in
@@ -37,7 +44,7 @@ def mesh_line(name, verts):
     return f'    <mesh name="{name}" vertex="{flat}"/>'
 
 
-def decompose(stl, hulls, threshold):
+def decompose(stl, hulls, threshold, prep_res=50):
     import coacd
     import trimesh
 
@@ -45,7 +52,7 @@ def decompose(stl, hulls, threshold):
     m.vertices = m.vertices - REFPOS
     coacd.set_log_level("error")
     parts = coacd.run_coacd(coacd.Mesh(m.vertices, m.faces), threshold=threshold, max_convex_hull=hulls,
-                            preprocess_mode="auto", resolution=2000, seed=0)
+                            preprocess_mode="auto", preprocess_resolution=prep_res, resolution=2000, seed=0)
     out = []
     for v, f in parts:
         h = trimesh.Trimesh(v, f).convex_hull
@@ -88,8 +95,9 @@ def main(argv=None):
     p.add_argument("--scene", type=pathlib.Path, default=here.parent / "mjcf" / "g1_conveyor_scene.xml")
     p.add_argument("--hulls", type=int, default=64)
     p.add_argument("--threshold", type=float, default=0.03)
+    p.add_argument("--preprocess-resolution", type=int, default=50)
     a = p.parse_args(argv)
-    hv = decompose(a.stl, a.hulls, a.threshold)
+    hv = decompose(a.stl, a.hulls, a.threshold, a.preprocess_resolution)
     bodies = rewrite(a.scene, hv)
     print(f"{len(hv)} hulls, {sum(len(v) for v in hv)} vertices, written to {bodies} panel bodies")
     return 0
