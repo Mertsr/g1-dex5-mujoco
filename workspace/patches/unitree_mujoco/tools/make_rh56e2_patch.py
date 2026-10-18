@@ -65,8 +65,9 @@ to the flange are excluded from the two wrist links. So the hand stops at a wall
 passing through it, and a closed hand holds an object by friction. grasp_weld still runs when
 its config enables it; with contact on, a hand that closes on a large object stops on its
 surface and may never reach the weld's closure threshold, so the grip is then friction alone.
-The collision is only as good as the meshes: with g1_description's placeholder STLs (tiny
-tetrahedra) the hulls are tiny too and the hand effectively still does not collide.
+The fingertip force-sensor pads get no collision geom: g1_description still ships them as 1 cm
+placeholder tetrahedra, which as hulls stuck out of the fingertips as spikes and were the only
+thing touching a part. The finger segments' own meshes collide there instead.
 
 NO ACTUATORS AND NO SENSORS, which is not an oversight. RobotBridge sets
 num_motor_ = mj_model_->nu and then indexes lowcmd->msg_.motor_cmd()[i], a fixed
@@ -216,8 +217,8 @@ def collect_hand(urdf, side):
 
     def walk(link):
         for joint in urdf.children.get(link, []):
-            # The grasp frame is a URDF-only planning frame; the sim welds to the palm itself.
-            if joint.find("child").get("link").endswith("_hand_grasp_frame"):
+            # The grasp and pinch frames are URDF-only planning frames; the sim welds to the palm.
+            if joint.find("child").get("link").endswith(("_hand_grasp_frame", "_hand_pinch_frame")):
                 continue
             bodies.append(joint)
             walk(joint.find("child").get("link"))
@@ -274,7 +275,12 @@ def emit_body(urdf, joint, scale, depth, lines, joints_out, mesh_out, rigid_out,
         )
         # Same mesh, collided as its convex hull. Separate from the visual geom so the visual
         # keeps group 1 and the collision geom can be hidden (group 3) and tuned on its own.
-        lines.append(f'{pad}  <geom class="rh56e2_collision" mesh="{child}" />')
+        # Not for the fingertip force-sensor pads: g1_description ships them as 1 cm placeholder
+        # tetrahedra, whose hulls stick out of the fingertips as spikes and become the only
+        # thing touching a part -- point contacts at odd angles that let any grip slide off.
+        # The real pads lie flush on the finger, whose own mesh already collides there.
+        if "_force_sensor" not in child:
+            lines.append(f'{pad}  <geom class="rh56e2_collision" mesh="{child}" />')
         mesh_out.append((child, visual["file"]))
         if rigid:
             rigid_out.append(child)
