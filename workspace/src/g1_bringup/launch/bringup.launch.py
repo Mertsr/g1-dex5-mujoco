@@ -335,8 +335,16 @@ def _setup(context, *args, **kwargs):
                     os.path.join(_perception_share(), "launch", "object_tracker.launch.py")
                 ),
                 launch_arguments={
+                    # Default: the conveyor line's config, or its flat-panel twin for
+                    # world:=conveyor2 (same line, a different part to track and grasp).
                     "config": LaunchConfiguration("object_tracker_config").perform(context)
-                    or os.path.join(_perception_share(), "config", "object_tracker_conveyor.yaml"),
+                    or os.path.join(
+                        _perception_share(),
+                        "config",
+                        "object_tracker_conveyor2.yaml"
+                        if LaunchConfiguration("world").perform(context) == "conveyor2"
+                        else "object_tracker_conveyor.yaml",
+                    ),
                     "rviz": LaunchConfiguration("object_tracker_rviz"),
                 }.items(),
             )
@@ -490,7 +498,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "object_tracker_config",
             default_value="",
-            description="The tracker's YAML. Empty: g1_perception's conveyor configuration.",
+            description="The tracker's YAML. Empty: g1_perception's conveyor configuration "
+            "(object_tracker_conveyor2.yaml with world:=conveyor2).",
         ),
         DeclareLaunchArgument(
             "activate_arm",

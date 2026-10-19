@@ -165,14 +165,16 @@ def _launch_setup(context, *args, **kwargs):
     # World and pinning compose: pinning is orthogonal to which room the robot is in, and
     # the geometry test wants both at once (a known robot pose in a known room).
     world = LaunchConfiguration("world").perform(context)
-    if world not in ("navigation", "perception", "manipulation", "lio", "conveyor"):
+    if world not in ("navigation", "perception", "manipulation", "lio", "conveyor", "conveyor2"):
         raise RuntimeError(
             f"world:={world!r} is not a scene. Use 'navigation' (the multi-room facility), "
             "'perception' (the small room the geometry test measures against), "
             "'manipulation' (one object on a pedestal at arm's length, for the skill tests), "
             "'lio' (the walled, asymmetric room for scoring LiDAR-inertial odometry "
-            "against a known 5 m square), or 'conveyor' (Mert's own world: a table, a "
-            "conveyor belt, and three parts, with no pinned/perception variant of its own)."
+            "against a known 5 m square), 'conveyor' (Mert's own world: a table, a "
+            "conveyor belt, and three parts, with no pinned/perception variant of its own), or "
+            "'conveyor2' (the same world with flat stand-in panels on legs instead of the BSH "
+            "panels)."
         )
     if sensors:
         suffix       = "_pinned" if pin_pelvis else ""
@@ -471,7 +473,8 @@ def generate_launch_description():
                 "multi-room facility with furniture, shelving, pillars and a ramp. "
                 "'perception' is the small bare room whose wall positions test_lidar_geometry "
                 "asserts against; use it for tests, not for looking at things. 'conveyor' is "
-                "Mert's own world: a table, a conveyor belt, and three parts.",
+                "Mert's own world: a table, a conveyor belt, and three parts. 'conveyor2' is "
+                "the same world with flat stand-in panels (g1_bringup/tools/make_conveyor2_scene.py).",
             ),
             DeclareLaunchArgument(
                 "rviz",
