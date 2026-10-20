@@ -85,49 +85,79 @@ g1_object_tracker:
         - "pallet -0.0753 0.0 0.0622 0 0 0"
         - "pallet -0.2259 0.0 0.0622 0 0 0"
       output_offset: "0 0 0"
-      # side_<hand>_<deg>: the can held like a bottle, from the side, halfway up: the palm
-      # against it, the four fingers wrapped round its far side and the thumb swung across
-      # behind it. The right hand takes it on its right side, the left hand on its left (the
-      # name says which; Pick gives each grasp only to that hand), fingers pointing <deg> from
-      # the can's +x, i.e. odom +x at 0. Pick tries only those whose fingers point away from the
-      # robot (side_grasp_min_forward) and comes down onto the can from above, beside it,
-      # in g1.srdf's "side_open"; it closes to "side_closed" and lifts straight up.
+      # side_<hand>_t<tilt>_<deg>: the can held like a bottle, from the side: the palm against
+      # it, the four fingers wrapped round its far side and the thumb swung across behind it.
+      # The right hand takes it on its right side, the left hand on its left (the name says
+      # which; Pick gives each grasp only to that hand), fingers pointing <deg> from the can's
+      # +x, i.e. odom +x at 0. Pick tries only those whose fingers point away from the robot
+      # (side_grasp_min_forward), comes down onto the can from above, beside it, in g1.srdf's
+      # "side_open", closes to "side_closed" and lifts straight up.
       #
-      # Pinch frame as usual (x along the fingers, level; y toward the curl side for the right
-      # hand), at 32 mm along the fingers past the can's axis, 28.5 mm off it on the curl side
-      # and 20 mm above the can's origin. The left hand is the mirror image, on the can's other
-      # side: Pick gives the left hand a published grasp turned half a turn about x (right for a
-      # pinch, where that just swaps thumb and fingers), so side_left_* are published already
-      # turned (roll pi) and the left pinch frame ends up level, as the mirror needs. Found in MuJoCo with the
-      # RH56E2's real finger pads and the simulator's hand gains (kp 1.5, 1 N m): from 18 cm above,
-      # both hands come down without touching the can, close round it (palm, all four fingers
-      # and the thumb in contact) and lift it 10 cm, the can turning 3-6 degrees in the hand;
-      # still so with the can 5 mm off in x or y or 10 mm in z.
+      # Pinch frame as usual (x along the fingers; y toward the curl side for the right hand):
+      # 32 mm along the fingers past the can's axis, 28.5 mm off it on the curl side, 45 mm above
+      # the can's origin (the top of the hand near the can's top), and the fingers tipped <tilt>
+      # degrees down, the hand turned about the line through the can's axis along the palm's
+      # normal. Not level: a level hand this low (the tray's cans stand with their tops at the
+      # pelvis) is past the G1 wrist's reach anywhere in front of the robot; tipped 10-15
+      # degrees, it reaches cans 0.14-0.35 m ahead of the pelvis and up to 0.3 m to the side.
+      #
+      # The left hand is the mirror image, on the can's other side. Pick gives the left hand a
+      # published grasp turned half a turn about x (right for a pinch, where that only swaps
+      # thumb and fingers), so side_left_* are published already turned (roll pi).
+      #
+      # Found in MuJoCo with the RH56E2's real finger pads and the simulator's hand gains (kp
+      # 1.5, 1 N m): from 18 cm above, both hands come down without touching the can, close
+      # round it (palm, all four fingers and the thumb in contact) and lift it 10 cm, the can
+      # settling 15-22 degrees off vertical in the hand (it follows the tipped hand).
       grasps:
-        - "side_right_000  0.0320 0.0285 0.0200  0 0 0.0000"
-        - "side_right_030  0.0135 0.0407 0.0200  0 0 0.5236"
-        - "side_right_060  -0.0087 0.0420 0.0200  0 0 1.0472"
-        - "side_right_090  -0.0285 0.0320 0.0200  0 0 1.5708"
-        - "side_right_120  -0.0407 0.0135 0.0200  0 0 2.0944"
-        - "side_right_150  -0.0420 -0.0087 0.0200  0 0 2.6180"
-        - "side_right_180  -0.0320 -0.0285 0.0200  0 0 3.1416"
-        - "side_right_210  -0.0135 -0.0407 0.0200  0 0 -2.6180"
-        - "side_right_240  0.0087 -0.0420 0.0200  0 0 -2.0944"
-        - "side_right_270  0.0285 -0.0320 0.0200  0 0 -1.5708"
-        - "side_right_300  0.0407 -0.0135 0.0200  0 0 -1.0472"
-        - "side_right_330  0.0420 0.0087 0.0200  0 0 -0.5236"
-        - "side_left_000  0.0320 -0.0285 0.0200  3.1416 0 0.0000"
-        - "side_left_030  0.0420 -0.0087 0.0200  3.1416 0 0.5236"
-        - "side_left_060  0.0407 0.0135 0.0200  3.1416 0 1.0472"
-        - "side_left_090  0.0285 0.0320 0.0200  3.1416 0 1.5708"
-        - "side_left_120  0.0087 0.0420 0.0200  3.1416 0 2.0944"
-        - "side_left_150  -0.0135 0.0407 0.0200  3.1416 0 2.6180"
-        - "side_left_180  -0.0320 0.0285 0.0200  3.1416 0 3.1416"
-        - "side_left_210  -0.0420 0.0087 0.0200  3.1416 0 -2.6180"
-        - "side_left_240  -0.0407 -0.0135 0.0200  3.1416 0 -2.0944"
-        - "side_left_270  -0.0285 -0.0320 0.0200  3.1416 0 -1.5708"
-        - "side_left_300  -0.0087 -0.0420 0.0200  3.1416 0 -1.0472"
-        - "side_left_330  0.0135 -0.0407 0.0200  3.1416 0 -0.5236"
+        - "side_right_t10_000  0.0315 0.0285 0.0394  0.0000 0.1745 0.0000"
+        - "side_right_t10_030  0.0130 0.0404 0.0394  -0.0000 0.1745 0.5236"
+        - "side_right_t10_060  -0.0089 0.0415 0.0394  0.0000 0.1745 1.0472"
+        - "side_right_t10_090  -0.0285 0.0315 0.0394  0.0000 0.1745 1.5708"
+        - "side_right_t10_120  -0.0404 0.0130 0.0394  0.0000 0.1745 2.0944"
+        - "side_right_t10_150  -0.0415 -0.0089 0.0394  0.0000 0.1745 2.6180"
+        - "side_right_t10_180  -0.0315 -0.0285 0.0394  0.0000 0.1745 3.1416"
+        - "side_right_t10_210  -0.0130 -0.0404 0.0394  0.0000 0.1745 -2.6180"
+        - "side_right_t10_240  0.0089 -0.0415 0.0394  0.0000 0.1745 -2.0944"
+        - "side_right_t10_270  0.0285 -0.0315 0.0394  0.0000 0.1745 -1.5708"
+        - "side_right_t10_300  0.0404 -0.0130 0.0394  -0.0000 0.1745 -1.0472"
+        - "side_right_t10_330  0.0415 0.0089 0.0394  -0.0000 0.1745 -0.5236"
+        - "side_right_t15_000  0.0309 0.0285 0.0367  0.0000 0.2618 0.0000"
+        - "side_right_t15_030  0.0125 0.0401 0.0367  -0.0000 0.2618 0.5236"
+        - "side_right_t15_060  -0.0092 0.0410 0.0367  -0.0000 0.2618 1.0472"
+        - "side_right_t15_090  -0.0285 0.0309 0.0367  -0.0000 0.2618 1.5708"
+        - "side_right_t15_120  -0.0401 0.0125 0.0367  0.0000 0.2618 2.0944"
+        - "side_right_t15_150  -0.0410 -0.0092 0.0367  0.0000 0.2618 2.6180"
+        - "side_right_t15_180  -0.0309 -0.0285 0.0367  0.0000 0.2618 3.1416"
+        - "side_right_t15_210  -0.0125 -0.0401 0.0367  0.0000 0.2618 -2.6180"
+        - "side_right_t15_240  0.0092 -0.0410 0.0367  0.0000 0.2618 -2.0944"
+        - "side_right_t15_270  0.0285 -0.0309 0.0367  0.0000 0.2618 -1.5708"
+        - "side_right_t15_300  0.0401 -0.0125 0.0367  0.0000 0.2618 -1.0472"
+        - "side_right_t15_330  0.0410 0.0092 0.0367  0.0000 0.2618 -0.5236"
+        - "side_left_t10_000  0.0315 -0.0285 0.0394  3.1416 0.1745 0.0000"
+        - "side_left_t10_030  0.0415 -0.0089 0.0394  3.1416 0.1745 0.5236"
+        - "side_left_t10_060  0.0404 0.0130 0.0394  3.1416 0.1745 1.0472"
+        - "side_left_t10_090  0.0285 0.0315 0.0394  3.1416 0.1745 1.5708"
+        - "side_left_t10_120  0.0089 0.0415 0.0394  3.1416 0.1745 2.0944"
+        - "side_left_t10_150  -0.0130 0.0404 0.0394  3.1416 0.1745 2.6180"
+        - "side_left_t10_180  -0.0315 0.0285 0.0394  3.1416 0.1745 3.1416"
+        - "side_left_t10_210  -0.0415 0.0089 0.0394  -3.1416 0.1745 -2.6180"
+        - "side_left_t10_240  -0.0404 -0.0130 0.0394  3.1416 0.1745 -2.0944"
+        - "side_left_t10_270  -0.0285 -0.0315 0.0394  3.1416 0.1745 -1.5708"
+        - "side_left_t10_300  -0.0089 -0.0415 0.0394  3.1416 0.1745 -1.0472"
+        - "side_left_t10_330  0.0130 -0.0404 0.0394  3.1416 0.1745 -0.5236"
+        - "side_left_t15_000  0.0309 -0.0285 0.0367  3.1416 0.2618 0.0000"
+        - "side_left_t15_030  0.0410 -0.0092 0.0367  3.1416 0.2618 0.5236"
+        - "side_left_t15_060  0.0401 0.0125 0.0367  3.1416 0.2618 1.0472"
+        - "side_left_t15_090  0.0285 0.0309 0.0367  3.1416 0.2618 1.5708"
+        - "side_left_t15_120  0.0092 0.0410 0.0367  -3.1416 0.2618 2.0944"
+        - "side_left_t15_150  -0.0125 0.0401 0.0367  3.1416 0.2618 2.6180"
+        - "side_left_t15_180  -0.0309 0.0285 0.0367  3.1416 0.2618 3.1416"
+        - "side_left_t15_210  -0.0410 0.0092 0.0367  3.1416 0.2618 -2.6180"
+        - "side_left_t15_240  -0.0401 -0.0125 0.0367  -3.1416 0.2618 -2.0944"
+        - "side_left_t15_270  -0.0285 -0.0309 0.0367  -3.1416 0.2618 -1.5708"
+        - "side_left_t15_300  -0.0092 -0.0410 0.0367  3.1416 0.2618 -1.0472"
+        - "side_left_t15_330  0.0125 -0.0401 0.0367  3.1416 0.2618 -0.5236"
 
     # Shared by every object.
     tracking:
