@@ -254,6 +254,11 @@ private:
     /// edge of the wrist's range, and KDL seeded from a hanging arm rarely finds it in the 0.05 s
     /// the other checks get.
     double side_grasp_ik_timeout_s_{ 0.5 };
+    /// A scoop grasp ("scoop_*") starts this far back from the grasp along the fingers' heading,
+    /// at the grasp's height, and comes down to there from scoop_hover_m_ above. A place slides
+    /// the open hand back out the same distance.
+    double scoop_slide_m_{ 0.11 };
+    double scoop_hover_m_{ 0.08 };
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;
@@ -266,6 +271,8 @@ private:
     /// Objects whose detection says they are round about their own z ("<object>/symmetric/z"):
     /// a place may turn them about that axis to whatever suits the hand.
     std::map<std::string, bool> held_yaw_free_;
+    /// Picked with a scoop: released by sliding the hand out from under it, not by lifting.
+    std::map<std::string, bool> held_scoop_;
 };
 
 }  // namespace g1_manipulation

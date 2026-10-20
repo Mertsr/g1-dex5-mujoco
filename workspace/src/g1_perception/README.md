@@ -29,6 +29,14 @@ ros2 launch g1_bringup bringup.launch.py world:=conveyor moveit:=true manipulati
 ros2 launch g1_bringup bringup.launch.py world:=conveyor2 moveit:=true manipulation:=true \
     object_source:=depth_tracker
 
+# world:=conveyor_flat is the line with the panels on a plain table: no tray rim, no stop bars, as
+# on the real line (g1_bringup/tools/make_conveyor_flat_scene.py). The tracker then loads
+# config/object_tracker_conveyor_flat.yaml: the panel config plus the scoop grasps
+# (scoop_<hand>_<edge>, g1.srdf's scoop_open / scoop_closed), which slide the hand in under the
+# panel's edge along the table:
+ros2 launch g1_bringup bringup.launch.py world:=conveyor_flat moveit:=true manipulation:=true \
+    object_source:=depth_tracker
+
 # On its own, against any depth stream with TF:
 ros2 launch g1_perception object_tracker.launch.py config:=/path/to/line.yaml
 ```

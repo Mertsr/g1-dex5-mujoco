@@ -138,6 +138,32 @@ bool isSideGrasp(const geometry_msgs::msg::Pose& grasp)
     return std::abs(tf2::Matrix3x3(q).getColumn(0).z()) < 0.5;
 }
 
+// "scoop_right_near": the hand palm up, slid in along the surface under the part's edge, the
+// thumb closed down on top (a BSH panel lying on a table: its edge lip stands 27 mm off it).
+bool isScoopGrasp(const std::string& grasp_name)
+{
+    return ("_" + grasp_name + "_").find("_scoop_") != std::string::npos;
+}
+
+// `pose` moved `distance` straight back along its fingers' heading, level: where a scoop starts
+// (in front of the edge, at the same height) and where it slides back out to.
+geometry_msgs::msg::Pose slideBack(const geometry_msgs::msg::Pose& pose, double distance)
+{
+    tf2::Quaternion q;
+    tf2::fromMsg(pose.orientation, q);
+    tf2::Vector3 heading = tf2::Matrix3x3(q).getColumn(0);
+    heading.setZ(0.0);
+    geometry_msgs::msg::Pose back = pose;
+    if (heading.length() < 1e-6)
+    {
+        return back;
+    }
+    heading.normalize();
+    back.position.x -= distance * heading.x();
+    back.position.y -= distance * heading.y();
+    return back;
+}
+
 std::string GraspVariant::suffix() const
 {
     if (std::abs(tilt) < 1e-6 && std::abs(lean) < 1e-6 && !flipped)
@@ -264,6 +290,11 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
     side_grasp_ik_timeout_s_ = declare_parameter<double>("side_grasp_ik_timeout_s", 0.5);
+    // A scoop grasp starts this far back from the grasp along the fingers' heading, at the
+    // grasp's height (the fingertips 1-2 cm in front of the edge), and comes down to there from
+    // this far above it.
+    scoop_slide_m_ = declare_parameter<double>("scoop_slide_m", 0.11);
+    scoop_hover_m_ = declare_parameter<double>("scoop_hover_m", 0.08);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -970,6 +1001,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::optional<geometry_msgs::msg::Pose> grasp_pose;
     geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
     std::string                             open_shape = "open", closed_shape = "closed";
+    /// A scoop's start: down at the surface in front of the edge, slid in from there.
+    std::optional<geometry_msgs::msg::Pose> entry_goal;
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
@@ -1016,6 +1049,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         /// so the arm goes to the solution nearest where it is, not whichever one OMPL samples
         /// for a pose goal (with a 7-joint arm, often a twisted elbow and wrist).
         std::map<std::string, double> pregrasp_joints;
+        /// A scoop's start, below the pregrasp: see entry_goal.
+        std::optional<geometry_msgs::msg::Pose> entry;
     };
     std::vector<Attempt> attempts;
     std::string          unreachable;
@@ -1039,6 +1074,81 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
         int reachable_here = 0;
         const std::string cname          = graspNameOf(c.name);
+        // A scoop (a hand under a panel's edge): tried exactly as published, by the hand its name
+        // says, and only from the side facing the robot (fingers pointing away from it). The hand
+        // goes to the pregrasp above the start, comes straight down in front of the edge to the
+        // surface the part lies on, slides in along its fingers under the edge, closes the thumb
+        // down on top and lifts straight up. All three poses must have an IK solution.
+        if (isScoopGrasp(cname))
+        {
+            if (forwardness(*c.pose) < side_grasp_min_forward_)
+            {
+                continue;
+            }
+            for (const std::string& a : arms_for(y))
+            {
+                if (!graspIsForArm(cname, a) ||
+                    static_cast<int>(attempts.size()) >= grasp_max_plans_)
+                {
+                    continue;
+                }
+                ArmContext ctx;
+                resolveArm(a, ctx);
+                usePinchFrame(ctx);
+                Attempt at{ c.name,
+                            a,
+                            *c.pose,
+                            handGoalFromGrasp(*c.pose, ctx.is_left),
+                            geometry_msgs::msg::Pose() };
+                at.entry    = slideBack(at.grasp, scoop_slide_m_);
+                at.pregrasp = *at.entry;
+                at.pregrasp.position.z += scoop_hover_m_;
+                ++ik_checked;
+                const auto grasp_ik = hasIk(
+                    ctx.arm_group,
+                    ctx.grasp_frame,
+                    at.grasp,
+                    nullptr,
+                    side_grasp_ik_timeout_s_);
+                if (!grasp_ik)
+                {
+                    fail(
+                        Pick::Feedback::PHASE_PREGRASP,
+                        "move_group's /compute_ik did not answer (MoveIt error " +
+                            std::to_string(ik_broken_code_) +
+                            "); is move_group running with its kinematics plugin?");
+                    return;
+                }
+                if (*grasp_ik &&
+                    hasIk(ctx.arm_group, ctx.grasp_frame, *at.entry, nullptr, side_grasp_ik_timeout_s_)
+                        .value_or(false) &&
+                    hasIk(
+                        ctx.arm_group,
+                        ctx.grasp_frame,
+                        at.pregrasp,
+                        &at.pregrasp_joints,
+                        side_grasp_ik_timeout_s_)
+                        .value_or(false))
+                {
+                    attempts.push_back(at);
+                    ++reachable_here;
+                }
+            }
+            if (reachable_here == 0 && static_cast<int>(attempts.size()) < grasp_max_plans_)
+            {
+                char where[160];
+                std::snprintf(
+                    where,
+                    sizeof where,
+                    "%s: scoop not reachable, grasp at pelvis (%.2f, %.2f, %.2f) m",
+                    c.name.c_str(),
+                    c.pose->position.x,
+                    c.pose->position.y,
+                    c.pose->position.z);
+                unreachable += (unreachable.empty() ? "" : "; ") + std::string(where);
+            }
+            continue;
+        }
         // A grasp from the side (a hand around a can): tried exactly as published, by the hand
         // its name says, and only with the fingers pointing away from the robot, so the right
         // hand comes in on the part's right and the left on its left. Not tilted or leaned: its
@@ -1239,6 +1349,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         grasp_pose    = at.grasp_pose;
         grasp_goal    = at.grasp;
         pregrasp_goal = at.pregrasp;
+        entry_goal    = at.entry;
         RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", object_id.c_str(),
                     at.label.c_str(), arm_name.c_str());
 
@@ -1342,10 +1453,28 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                                 object_id.c_str(), shift * 1000.0, turn * 180.0 / M_PI);
                     tf2::fromMsg(grasp_goal, grasp_T);
                     tf2::toMsg(moved * grasp_T, grasp_goal);
+                    if (entry_goal)
+                    {
+                        tf2::Transform entry_T;
+                        tf2::fromMsg(*entry_goal, entry_T);
+                        geometry_msgs::msg::Pose moved_entry;
+                        tf2::toMsg(moved * entry_T, moved_entry);
+                        entry_goal = moved_entry;
+                    }
                     aimed_object_pose = *now_pose;
                 }
             }
         }
+    }
+
+    // A scoop first comes straight down in front of the edge to the surface; the approach below
+    // is then the slide in under the edge, along the surface.
+    if (entry_goal && !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent"))
+    {
+        fail(
+            Pick::Feedback::PHASE_APPROACH,
+            "could not lower the hand to the surface in front of the edge");
+        return;
     }
 
     // Straight in for a published grasp: the parts beside it are close, and a free-space plan
@@ -1455,6 +1584,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
         held_arm_[object_id]   = arm_name;
         held_release_[object_id] = grasp_pose ? open_shape : std::string("open");
+        held_scoop_[object_id]   = static_cast<bool>(entry_goal);
         held_yaw_free_[object_id] =
             static_cast<bool>(findHypothesis(*detection, object_id + "/symmetric/z"));
     }
@@ -1490,6 +1620,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     std::string                   picked_with;
     std::string                   release_shape = "open";
     bool                          yaw_free      = false;
+    bool                          scooped       = false;
     {
         std::lock_guard<std::mutex> lock(held_mutex_);
         if (const auto it = held_grasp_.find(held_id); it != held_grasp_.end())
@@ -1498,6 +1629,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
             picked_with    = held_arm_[held_id];
             release_shape  = held_release_.count(held_id) ? held_release_[held_id] : "open";
             yaw_free       = held_yaw_free_.count(held_id) && held_yaw_free_[held_id];
+            scooped        = held_scoop_.count(held_id) && held_scoop_[held_id];
         }
     }
 
@@ -1622,9 +1754,10 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
                 world_T_object = best_T;
             }
             tf2::toMsg(world_T_object * grasp_T_object->inverse(), place_goal);
-            // A part held from the side is set down from above and let go there, as it was
-            // picked: the approach runs along the world's vertical, not along the fingers.
-            if (isSideGrasp(place_goal))
+            // A part held from the side (or scooped from under its edge) is set down from above
+            // and let go there, as it was picked: the approach runs along the world's vertical,
+            // not along the fingers.
+            if (scooped || isSideGrasp(place_goal))
             {
                 preplace = place_goal;
                 preplace.position.z += grasp_approach_m_;
@@ -1737,10 +1870,25 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         held_arm_.erase(held_id);
         held_release_.erase(held_id);
         held_yaw_free_.erase(held_id);
+        held_scoop_.erase(held_id);
     }
 
     feedback->phase = Place::Feedback::PHASE_RETREAT;
     goal_handle->publish_feedback(feedback);
+    // A scooped part sits on the fingers: lifting the hand would lift it again. The open hand
+    // slides back out from under its edge along the surface first, still allowed to touch it,
+    // and goes up from there.
+    if (scooped)
+    {
+        const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_);
+        if (!moveLinear(*arm_group, out, arm.grasp_frame, "slide out"))
+        {
+            fail(Place::Feedback::PHASE_RETREAT, "could not slide the hand out from under the part");
+            return;
+        }
+        preplace = out;
+        preplace.position.z += grasp_approach_m_;
+    }
     // Restored BEFORE the retreat is planned, or the lift may route the open hand through what
     // was just set down. The object only: the hand is inside the surface's voxels at this height
     // by construction, so restoring `<octomap>` here would put the start state in collision.

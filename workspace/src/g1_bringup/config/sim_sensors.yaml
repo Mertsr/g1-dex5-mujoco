@@ -85,7 +85,8 @@ grasp_weld:
 # the way grasp_weld stands in for finger contact -- see
 # workspace/vendor/unitree_mujoco/conveyor_handler.h for the mechanism.
 #
-# Only g1_conveyor_scene.xml and g1_conveyor2_scene.xml declare a `conveyor_belt` geom, so this
+# Only g1_conveyor_scene.xml and its generated variants (g1_conveyor2_scene.xml,
+# g1_conveyor_flat_scene.xml) declare a `conveyor_belt` geom, so this
 # is a no-op (not even a wasted thread) against every other scene regardless of this `enabled`
 # flag.
 #

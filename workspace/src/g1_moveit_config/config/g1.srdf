@@ -423,6 +423,29 @@
     <joint name="left_ring_1_joint" value="1.10"/>
     <joint name="left_little_1_joint" value="1.10"/>
   </group_state>
+  <!-- A BSH panel scooped from under its edge (g1_perception's scoop_<hand>_<edge> grasps in
+       object_tracker_conveyor_flat.yaml): the hand palm up, slid in along the table under the
+       panel's edge lip. scoop_open: the thumb swung up over the fingers and straight, the
+       fingers straight, flat enough to pass under the lip (27 mm off the table); scoop_closed:
+       the fingers curled up against the panel's underside and the thumb bent down onto its top,
+       clamping the plate between them. Found in MuJoCo with the simulator's hand gains: either
+       hand lifts the 0.3 kg panel this way, from either long edge. -->
+  <group_state name="scoop_open" group="left_hand">
+    <joint name="left_thumb_1_joint" value="1.20"/>
+    <joint name="left_thumb_2_joint" value="0.00"/>
+    <joint name="left_index_1_joint" value="0.00"/>
+    <joint name="left_middle_1_joint" value="0.00"/>
+    <joint name="left_ring_1_joint" value="0.00"/>
+    <joint name="left_little_1_joint" value="0.00"/>
+  </group_state>
+  <group_state name="scoop_closed" group="left_hand">
+    <joint name="left_thumb_1_joint" value="1.20"/>
+    <joint name="left_thumb_2_joint" value="0.60"/>
+    <joint name="left_index_1_joint" value="0.80"/>
+    <joint name="left_middle_1_joint" value="0.80"/>
+    <joint name="left_ring_1_joint" value="0.80"/>
+    <joint name="left_little_1_joint" value="0.80"/>
+  </group_state>
   <group_state name="closed" group="left_hand">
     <joint name="left_thumb_1_joint" value="1.20"/>
     <joint name="left_thumb_2_joint" value="0.45"/>
@@ -474,6 +497,29 @@
     <joint name="right_middle_1_joint" value="1.10"/>
     <joint name="right_ring_1_joint" value="1.10"/>
     <joint name="right_little_1_joint" value="1.10"/>
+  </group_state>
+  <!-- A BSH panel scooped from under its edge (g1_perception's scoop_<hand>_<edge> grasps in
+       object_tracker_conveyor_flat.yaml): the hand palm up, slid in along the table under the
+       panel's edge lip. scoop_open: the thumb swung up over the fingers and straight, the
+       fingers straight, flat enough to pass under the lip (27 mm off the table); scoop_closed:
+       the fingers curled up against the panel's underside and the thumb bent down onto its top,
+       clamping the plate between them. Found in MuJoCo with the simulator's hand gains: either
+       hand lifts the 0.3 kg panel this way, from either long edge. -->
+  <group_state name="scoop_open" group="right_hand">
+    <joint name="right_thumb_1_joint" value="1.20"/>
+    <joint name="right_thumb_2_joint" value="0.00"/>
+    <joint name="right_index_1_joint" value="0.00"/>
+    <joint name="right_middle_1_joint" value="0.00"/>
+    <joint name="right_ring_1_joint" value="0.00"/>
+    <joint name="right_little_1_joint" value="0.00"/>
+  </group_state>
+  <group_state name="scoop_closed" group="right_hand">
+    <joint name="right_thumb_1_joint" value="1.20"/>
+    <joint name="right_thumb_2_joint" value="0.60"/>
+    <joint name="right_index_1_joint" value="0.80"/>
+    <joint name="right_middle_1_joint" value="0.80"/>
+    <joint name="right_ring_1_joint" value="0.80"/>
+    <joint name="right_little_1_joint" value="0.80"/>
   </group_state>
   <group_state name="closed" group="right_hand">
     <joint name="right_thumb_1_joint" value="1.20"/>

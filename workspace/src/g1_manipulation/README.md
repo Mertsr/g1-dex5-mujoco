@@ -98,6 +98,18 @@ result:
   the part) and rises straight back up. An object whose detection carries `<object>/symmetric/z`
   (the tracker's `symmetric_z`) may be stood in a slot turned any way about its axis; the place
   takes the turn nearest the hand's current orientation.
+
+  A grasp with a `scoop` part in its name (`scoop_right_near`, the BSH panel in
+  `object_tracker_conveyor_flat.yaml`) takes a flat part lying on a table from UNDER its edge,
+  palm up, the way a waiter takes a plate. Tried exactly as published, by the hand its name says,
+  only if its fingers point away from the robot (`side_grasp_min_forward`). The hand opens to
+  `<grasp>_open` (`scoop_open`), goes to a pregrasp `scoop_hover_m` (0.08) above the start, comes
+  straight down to the start -- `scoop_slide_m` (0.11) back from the grasp along the fingers'
+  level heading, at the grasp's height, i.e. on the table in front of the edge -- slides in under
+  the edge on a Cartesian path, closes to `<grasp>_closed` (`scoop_closed`: fingers up against the
+  underside, thumb down on top) and lifts straight up. IK is checked at all three poses. A place
+  of a scooped part lowers it from above, opens, slides the hand back out the same distance along
+  the surface (still allowed to touch the part), and only then rises.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the

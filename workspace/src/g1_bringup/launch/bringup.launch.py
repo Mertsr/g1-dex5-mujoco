@@ -335,15 +335,21 @@ def _setup(context, *args, **kwargs):
                     os.path.join(_perception_share(), "launch", "object_tracker.launch.py")
                 ),
                 launch_arguments={
-                    # Default: the conveyor line's config, or its flat-panel twin for
-                    # world:=conveyor2 (same line, a different part to track and grasp).
+                    # Default: the conveyor line's config, or the one for the world's own
+                    # variant: world:=conveyor2 (same line, a can to track and grasp instead
+                    # of the panel), world:=conveyor_flat (same line, panels on a plain table,
+                    # held with the scoop grasps).
                     "config": LaunchConfiguration("object_tracker_config").perform(context)
                     or os.path.join(
                         _perception_share(),
                         "config",
-                        "object_tracker_conveyor2.yaml"
-                        if LaunchConfiguration("world").perform(context) == "conveyor2"
-                        else "object_tracker_conveyor.yaml",
+                        {
+                            "conveyor2": "object_tracker_conveyor2.yaml",
+                            "conveyor_flat": "object_tracker_conveyor_flat.yaml",
+                        }.get(
+                            LaunchConfiguration("world").perform(context),
+                            "object_tracker_conveyor.yaml",
+                        ),
                     ),
                     "rviz": LaunchConfiguration("object_tracker_rviz"),
                 }.items(),
@@ -499,7 +505,8 @@ def generate_launch_description():
             "object_tracker_config",
             default_value="",
             description="The tracker's YAML. Empty: g1_perception's conveyor configuration "
-            "(object_tracker_conveyor2.yaml with world:=conveyor2).",
+            "(object_tracker_conveyor2.yaml with world:=conveyor2, "
+            "object_tracker_conveyor_flat.yaml with world:=conveyor_flat).",
         ),
         DeclareLaunchArgument(
             "activate_arm",
