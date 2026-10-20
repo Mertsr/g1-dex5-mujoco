@@ -206,9 +206,9 @@ private:
     int ik_broken_code_{ 0 };  ///< last /compute_ik error that was not "no solution"
     /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
     /// move_group's /compute_ik. Nothing if the service did not answer.
-    std::optional<bool> hasIk(const std::string& group, const std::string& link,
-                              const geometry_msgs::msg::Pose& pose,
-                              std::map<std::string, double>* joints = nullptr);
+    std::optional<bool> hasIk(
+        const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+        std::map<std::string, double>* joints = nullptr, double timeout_s = 0.05);
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
     double octomap_refill_s_{ 1.0 };
     /// plan(), and on failure clear the octomap, let it refill and plan once more: a start
@@ -250,6 +250,10 @@ private:
     /// tried only if they point at least this far away from the robot (pelvis +x component of
     /// the fingers' direction): the hand then sits on the side of the part it was meant for.
     double side_grasp_min_forward_{ 0.5 };
+    /// IK time per side-grasp check. The hand level beside a part near pelvis height is at the
+    /// edge of the wrist's range, and KDL seeded from a hanging arm rarely finds it in the 0.05 s
+    /// the other checks get.
+    double side_grasp_ik_timeout_s_{ 0.5 };
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;

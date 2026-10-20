@@ -263,6 +263,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
+    side_grasp_ik_timeout_s_ = declare_parameter<double>("side_grasp_ik_timeout_s", 0.5);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -762,9 +763,9 @@ void G1ManipulationServer::usePinchFrame(ArmContext& arm)
     }
 }
 
-std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const std::string& link,
-                                                const geometry_msgs::msg::Pose& pose,
-                                                std::map<std::string, double>* joints)
+std::optional<bool> G1ManipulationServer::hasIk(
+    const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+    std::map<std::string, double>* joints, double timeout_s)
 {
     ik_broken_code_ = 0;
     if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
@@ -778,10 +779,10 @@ std::optional<bool> G1ManipulationServer::hasIk(const std::string& group, const 
     request->ik_request.avoid_collisions  = false;  // reach only; the planner checks collisions
     request->ik_request.pose_stamped.header.frame_id = planning_frame_;
     request->ik_request.pose_stamped.pose = pose;
-    request->ik_request.timeout           = rclcpp::Duration::from_seconds(0.05);
+    request->ik_request.timeout                      = rclcpp::Duration::from_seconds(timeout_s);
     auto future = compute_ik_->async_send_request(request);
     // Waited on without spinning, like the planning-scene calls: the executor owns this node.
-    if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready)
+    if (future.wait_for(std::chrono::duration<double>(2.0 + timeout_s)) != std::future_status::ready)
     {
         return std::nullopt;
     }
@@ -1069,7 +1070,12 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 at.pregrasp = at.grasp;
                 at.pregrasp.position.z += grasp_approach_m_;
                 ++ik_checked;
-                const auto grasp_ik = hasIk(ctx.arm_group, ctx.grasp_frame, at.grasp);
+                const auto grasp_ik = hasIk(
+                    ctx.arm_group,
+                    ctx.grasp_frame,
+                    at.grasp,
+                    nullptr,
+                    side_grasp_ik_timeout_s_);
                 if (!grasp_ik)
                 {
                     fail(
@@ -1079,9 +1085,13 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                             "); is move_group running with its kinematics plugin?");
                     return;
                 }
-                if (*grasp_ik &&
-                    hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp, &at.pregrasp_joints)
-                        .value_or(false))
+                if (*grasp_ik && hasIk(
+                                     ctx.arm_group,
+                                     ctx.grasp_frame,
+                                     at.pregrasp,
+                                     &at.pregrasp_joints,
+                                     side_grasp_ik_timeout_s_)
+                                     .value_or(false))
                 {
                     attempts.push_back(at);
                     ++reachable_here;
