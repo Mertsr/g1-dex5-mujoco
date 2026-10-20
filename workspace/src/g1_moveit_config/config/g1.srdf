@@ -401,6 +401,19 @@
     <joint name="left_ring_1_joint" value="0.40"/>
     <joint name="left_little_1_joint" value="0.40"/>
   </group_state>
+  <!-- A wider pre-shape for a top-down pinch on a round part (world:=conveyor2's 45 mm
+       cylinder): thumb swung across as in pinch_open, but thumb straight and the fingers only
+       20 % closed, so thumb and fingers stand 10.6 cm apart across the closing direction
+       (pinch_open: 3.7 cm, too narrow to go down over the part). Pick uses it for a published
+       grasp named "top" or "top_<n>" (a grasp "X" goes down in "X_open" when the hand has one). -->
+  <group_state name="top_open" group="left_hand">
+    <joint name="left_thumb_1_joint" value="1.20"/>
+    <joint name="left_thumb_2_joint" value="0.00"/>
+    <joint name="left_index_1_joint" value="0.20"/>
+    <joint name="left_middle_1_joint" value="0.20"/>
+    <joint name="left_ring_1_joint" value="0.20"/>
+    <joint name="left_little_1_joint" value="0.20"/>
+  </group_state>
   <group_state name="closed" group="left_hand">
     <joint name="left_thumb_1_joint" value="1.20"/>
     <joint name="left_thumb_2_joint" value="0.45"/>
@@ -430,6 +443,19 @@
     <joint name="right_middle_1_joint" value="0.40"/>
     <joint name="right_ring_1_joint" value="0.40"/>
     <joint name="right_little_1_joint" value="0.40"/>
+  </group_state>
+  <!-- A wider pre-shape for a top-down pinch on a round part (world:=conveyor2's 45 mm
+       cylinder): thumb swung across as in pinch_open, but thumb straight and the fingers only
+       20 % closed, so thumb and fingers stand 10.6 cm apart across the closing direction
+       (pinch_open: 3.7 cm, too narrow to go down over the part). Pick uses it for a published
+       grasp named "top" or "top_<n>" (a grasp "X" goes down in "X_open" when the hand has one). -->
+  <group_state name="top_open" group="right_hand">
+    <joint name="right_thumb_1_joint" value="1.20"/>
+    <joint name="right_thumb_2_joint" value="0.00"/>
+    <joint name="right_index_1_joint" value="0.20"/>
+    <joint name="right_middle_1_joint" value="0.20"/>
+    <joint name="right_ring_1_joint" value="0.20"/>
+    <joint name="right_little_1_joint" value="0.20"/>
   </group_state>
   <group_state name="closed" group="right_hand">
     <joint name="right_thumb_1_joint" value="1.20"/>

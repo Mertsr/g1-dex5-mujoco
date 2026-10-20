@@ -22,9 +22,10 @@ ros2 launch g1_bringup bringup.launch.py world:=conveyor object_tracker:=true rv
 ros2 launch g1_bringup bringup.launch.py world:=conveyor moveit:=true manipulation:=true \
     object_source:=depth_tracker
 
-# world:=conveyor2 is the same line with flat stand-in panels on four legs instead of the BSH
-# panel (g1_bringup/tools/make_conveyor2_scene.py); the tracker then loads
-# config/object_tracker_conveyor2.yaml (models/flat_panel.stl, grasp edge_near) by itself:
+# world:=conveyor2 is the same line with an upright 45 mm cylinder instead of each BSH panel
+# (g1_bringup/tools/make_conveyor2_scene.py); the tracker then loads
+# config/object_tracker_conveyor2.yaml (models/cylinder.stl, objects cylinder_0..3, top-down
+# grasps top_000..top_315 taken in g1.srdf's "top_open" pre-shape) by itself:
 ros2 launch g1_bringup bringup.launch.py world:=conveyor2 moveit:=true manipulation:=true \
     object_source:=depth_tracker
 

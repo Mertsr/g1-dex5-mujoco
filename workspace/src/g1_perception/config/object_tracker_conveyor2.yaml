@@ -1,7 +1,7 @@
 # The model-based tracker for world:=conveyor2 (g1_bringup/mjcf/g1_conveyor2_scene.xml): the
-# conveyor world with the BSH panels replaced by a flat stand-in panel on four legs (written by
-# g1_bringup/tools/make_conveyor2_scene.py, which also writes this config's model,
-# models/flat_panel.stl). Everything but the panel is object_tracker_conveyor.yaml unchanged.
+# conveyor world with the BSH panels replaced by an upright cylinder, 45 mm across and 104.6 mm
+# tall (written by g1_bringup/tools/make_conveyor2_scene.py, which also writes this config's
+# model, models/cylinder.stl). Everything but the part is object_tracker_conveyor.yaml unchanged.
 # bringup.launch.py picks this file by default when world:=conveyor2.
 #
 # Pose strings: "<frame> x y z [roll pitch yaw]" (metres, radians, RPY about fixed axes as in
@@ -26,9 +26,8 @@ g1_object_tracker:
     publish_tf: false
 
     # Fitted in this order, and each one's surface is removed from the depth before the next
-    # is fitted: the pallet first, so a panel seated in a nest with 2 mm clearance is not
-    # fitted to the nest's walls.
-    objects: ["pallet", "panel"]
+    # is fitted: the pallet first, so a part standing in a nest is not fitted to the pallet.
+    objects: ["pallet", "cylinder"]
 
     pallet:
       # Swap in the scanned PLY here (model_scale 0.001 if it is in millimetres). Its frame must
@@ -50,53 +49,60 @@ g1_object_tracker:
       # pallet searched for again, never reported. Same caveat as the prior: odom here is the
       # simulator's; on the robot write it in map.
       region: "odom 0.10 1.00 0.57 0.63 0.74 0.79 5"
-      # Where a panel's BODY frame sits when seated in each nest, in the pallet's frame. Published
+      # Where the part's BODY frame sits when placed in each nest, in the pallet's frame. Published
       # as pallet/slot/nest_<k> on /objects; Place with surface_object_id "pallet/slot/nest_2"
-      # puts the held panel exactly there. Same measurement as the panel's nest priors below,
-      # carried from the STL frame to the body frame.
+      # puts the held cylinder exactly there.
       slots:
-        # The flat panel seated in each nest: body frame level and square to the pallet, origin
-        # 12.25 mm above the pad tops (pallet z 0.0622), at each nest's centre. Measured by
-        # settling the part in nest 1 in the simulator; the others are the nest sites' x.
+        # The cylinder standing on the pallet plate (top z 0.01) at each nest's centre, between
+        # its end cradles: origin half its height above the plate (pallet z 0.0622), inside the
+        # nest site the simulator's conveyor handler watches, so a placed part indexes the
+        # pallet. Measured by dropping the part into nest 1 in the simulator; the others are the
+        # nest sites' x.
         - "nest_1  0.2259 0.0 0.0622 0 0 0"
         - "nest_2  0.0753 0.0 0.0622 0 0 0"
         - "nest_3  -0.0753 0.0 0.0622 0 0 0"
         - "nest_4  -0.2259 0.0 0.0622 0 0 0"
 
-    panel:
-      model: package://g1_perception/models/flat_panel.stl
+    cylinder:
+      model: package://g1_perception/models/cylinder.stl
       model_scale: 1.0
       instances: 4
       prior_jitter: "0.02 0.2"
-      # The tray's part_tray_1..4 as they rest (feet on the floor at z 0.71, origin 12.25 mm
-      # above the feet, level), then the four nests relative to the tracked pallet. Measured by
-      # settling the scene. The model's frame IS the body frame, so no output offset.
+      # The tray's part_tray_1..4 as they rest (standing on the floor, top z 0.71; origin at the
+      # centre, 52.3 mm up), then the four nests relative to the tracked pallet. Measured by
+      # settling the scene. The model's frame IS the body frame, so no output offset. Turned
+      # about its axis the cylinder looks the same, so the yaw the tracker reports is arbitrary;
+      # the grasps below cover every yaw for that reason.
       priors:
-        - "odom 1.605 -0.80 0.7222 0 0 0"
-        - "odom 1.755 -0.80 0.7222 0 0 0"
-        - "odom 1.905 -0.80 0.7222 0 0 0"
-        - "odom 2.055 -0.80 0.7222 0 0 0"
+        - "odom 1.605 -0.80 0.7622 0 0 0"
+        - "odom 1.755 -0.80 0.7622 0 0 0"
+        - "odom 1.905 -0.80 0.7622 0 0 0"
+        - "odom 2.055 -0.80 0.7622 0 0 0"
         - "pallet 0.2259 0.0 0.0622 0 0 0"
         - "pallet 0.0753 0.0 0.0622 0 0 0"
         - "pallet -0.0753 0.0 0.0622 0 0 0"
         - "pallet -0.2259 0.0 0.0622 0 0 0"
       output_offset: "0 0 0"
-      # edge_near: the middle of the plate's near long edge (the edge facing the robot at the
-      # tray), taken from ABOVE: fingers straight down just in front of the edge, the palm facing
-      # the part, then the fingers curl in under the plate while the thumb comes down on its top
-      # face -- the plate's 6 mm thickness pinched between fingertips below and thumb above. The
-      # 10 cm legs leave the room under the plate for the fingertips, and in the tray the fingers
-      # pass above the rim (top z 0.77, plate underside 0.81).
+      # top_<deg>: from straight above, on the axis, pinched across the diameter 25 mm below the
+      # top face (body z +0.0273), the thumb toward body yaw <deg>. Pinch frame as usual: x along
+      # the fingers (straight down), thumb toward +y. Eight yaws because the reported yaw means
+      # nothing for a cylinder: Pick tries them all (and its tilts and leans of each) and plans
+      # to whichever the arm reaches; at the tray, the ones closing along the tray's y keep the
+      # fingers off the stop bars between the parts.
       #
-      # Pinch frame as usual (x along the fingers = straight down, thumb toward +y = into the
-      # part, i.e. the body's +x), at x -59 mm (the edge is at -68.3), 3 mm above the plate's top
-      # face, y 8 mm off centre (the four fingers then straddle the middle). Checked in MuJoCo with
-      # g1.srdf's pinch_open and closed shapes: the straight-down approach from 20 cm clears the
-      # plate and the rim; closing, the index, middle and ring tips meet the plate's underside at
-      # its edge and the thumb its top face 11 mm in. Pick's leans (about the edge) reach it from
-      # further away.
+      # The hand goes down in g1.srdf's "top_open" (Pick takes "<grasp>_open" when the hand has
+      # it): pinch_open's 3.7 cm across would land on the 45 mm top face. Checked in MuJoCo for
+      # both hands: top_open passes over the part, and "closed" pinches it between thumb and
+      # index/middle at the height above.
       grasps:
-        - "edge_near  -0.0590 -0.0080 0.0968  1.5708 1.5708 0.0"
+        - "top_000  0.0 0.0 0.0273  1.5708 1.5708 0.0"
+        - "top_045  0.0 0.0 0.0273  0.7854 1.5708 0.0"
+        - "top_090  0.0 0.0 0.0273  0.0 1.5708 0.0"
+        - "top_135  0.0 0.0 0.0273  -0.7854 1.5708 0.0"
+        - "top_180  0.0 0.0 0.0273  -1.5708 1.5708 0.0"
+        - "top_225  0.0 0.0 0.0273  -2.3562 1.5708 0.0"
+        - "top_270  0.0 0.0 0.0273  3.1416 1.5708 0.0"
+        - "top_315  0.0 0.0 0.0273  2.3562 1.5708 0.0"
 
     # Shared by every object.
     tracking:

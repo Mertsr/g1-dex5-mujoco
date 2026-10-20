@@ -79,7 +79,9 @@ result:
   past about 0.43 m ahead of the pelvis; at 0.36 m, tilts within 30 degrees of vertical; at 0.28 m,
   up to 45 degrees either way. The pose is the RIGHT hand's grasp frame at the grasp, the point it
   pinches (x along the fingers, which is the approach direction; the four fingers on -y, the thumb
-  swung across on +y; the hand goes down in the SRDF's `pinch_open` shape when it has one), and the left
+  swung across on +y; the hand goes down in the SRDF's `<grasp>_open` shape if it has one -- the
+  grasp's name, or that name less a trailing `_<n>`, so `top_090` uses `top_open` -- else in
+  `pinch_open` when it has one), and the left
   hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
   (0.20) back along the fingers, re-reads the part's pose and re-aims if it moved (up to
   `reaim_max_shift_m`, 0.04; more aborts as knocked), then goes straight in on a Cartesian path, closes, and lifts straight

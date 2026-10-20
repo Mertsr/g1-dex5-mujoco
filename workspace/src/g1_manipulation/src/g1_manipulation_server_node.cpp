@@ -1108,11 +1108,41 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // off the table before the hand is around it. Reported separately from the arm move: a
         // hand that will not open is an unacquired or unpowered hand, not geometry.
         // A published grasp is a pinch: thumb across from the fingers before going down, if the
-        // hand has that shape ("pinch_open" in g1.srdf). The bounding-box grasp opens fully.
-        const auto& shapes = hand_group->getNamedTargets();
-        const std::string open_shape =
-            grasp_pose && std::find(shapes.begin(), shapes.end(), "pinch_open") != shapes.end() ? "pinch_open"
-                                                                                                : "open";
+        // hand has that shape ("pinch_open" in g1.srdf). A grasp can bring its own pre-shape: a
+        // named hand state "<grasp>_open" (the grasp's name, or that name less a trailing "_<n>"
+        // index, so "top_090" uses "top_open") is used instead when the hand has one -- a part
+        // too wide for pinch_open's opening goes down in it. The bounding-box grasp opens fully.
+        const auto& shapes    = hand_group->getNamedTargets();
+        const auto  has_shape = [&](const std::string& s) {
+            return std::find(shapes.begin(), shapes.end(), s) != shapes.end();
+        };
+        std::string open_shape = "open";
+        if (grasp_pose)
+        {
+            std::string grasp_name = at.label.substr(0, at.label.find(" ("));
+            const auto  slash      = grasp_name.rfind("/grasp/");
+            if (slash != std::string::npos)
+            {
+                grasp_name = grasp_name.substr(slash + 7);
+            }
+            const auto underscore = grasp_name.rfind('_');
+            const bool indexed =
+                underscore != std::string::npos && underscore + 1 < grasp_name.size() &&
+                grasp_name.find_first_not_of("0123456789", underscore + 1) == std::string::npos;
+            const std::string unindexed = indexed ? grasp_name.substr(0, underscore) : grasp_name;
+            if (has_shape(grasp_name + "_open"))
+            {
+                open_shape = grasp_name + "_open";
+            }
+            else if (has_shape(unindexed + "_open"))
+            {
+                open_shape = unindexed + "_open";
+            }
+            else if (has_shape("pinch_open"))
+            {
+                open_shape = "pinch_open";
+            }
+        }
         if (!moveToNamed(*hand_group, open_shape))
         {
             fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
