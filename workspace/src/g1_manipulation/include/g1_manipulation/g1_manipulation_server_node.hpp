@@ -246,11 +246,22 @@ private:
     double grasp_lean_max_rad_{ M_PI / 3 };
     double grasp_min_descent_{ 0.25 };
     int    grasp_max_plans_{ 6 };  ///< IK-reachable grasps planned to before giving up
+    /// A published grasp whose fingers are about level (a hand beside a can, not over it) is
+    /// tried only if they point at least this far away from the robot (pelvis +x component of
+    /// the fingers' direction): the hand then sits on the side of the part it was meant for.
+    double side_grasp_min_forward_{ 0.5 };
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;
     std::map<std::string, tf2::Transform>   held_grasp_;
     std::map<std::string, std::string>      held_arm_;
+    /// The hand state a held object is let go in: its grasp's "<grasp>_open" when the pick used
+    /// one ("open" otherwise), so a hand wrapped around a can opens back to the shape it came
+    /// down in rather than swinging its thumb through the part.
+    std::map<std::string, std::string> held_release_;
+    /// Objects whose detection says they are round about their own z ("<object>/symmetric/z"):
+    /// a place may turn them about that axis to whatever suits the hand.
+    std::map<std::string, bool> held_yaw_free_;
 };
 
 }  // namespace g1_manipulation

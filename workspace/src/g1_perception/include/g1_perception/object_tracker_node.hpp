@@ -83,6 +83,11 @@ private:
     /// "<object>/grasp/<name>" and "<object>/slot/<name>", so they travel through /objects with
     /// the object's own pose and stamp.
     std::vector<std::vector<FramedPose>> grasps_, slots_;
+    /// Per instance: the part is round about its own z (a can, a bottle), so the yaw a fit
+    /// reports is meaningless. Its pose is reported with x turned to face the world frame's +x
+    /// instead, so its yaw is the same every frame and from every view, and the grasps and slots
+    /// that ride on it stay put. (<name>.symmetric_z)
+    std::vector<bool> symmetric_z_;
     /// Per object, the last verified pose (world frame), reported through rejected frames while
     /// the object is still being tracked.
     std::vector<std::optional<Eigen::Isometry3f>> last_verified_;

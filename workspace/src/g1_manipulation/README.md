@@ -79,14 +79,25 @@ result:
   past about 0.43 m ahead of the pelvis; at 0.36 m, tilts within 30 degrees of vertical; at 0.28 m,
   up to 45 degrees either way. The pose is the RIGHT hand's grasp frame at the grasp, the point it
   pinches (x along the fingers, which is the approach direction; the four fingers on -y, the thumb
-  swung across on +y; the hand goes down in the SRDF's `<grasp>_open` shape if it has one -- the
-  grasp's name, or that name less a trailing `_<n>`, so `top_090` uses `top_open` -- else in
-  `pinch_open` when it has one), and the left
-  hand takes the same pose turned half a turn about x. The hand goes to a point `grasp_approach_m`
+  swung across on +y; the hand goes down in the SRDF's `pinch_open` shape when it has one), and the
+  left hand takes the same pose turned half a turn about x. A grasp can bring its own hand states:
+  `<grasp>_open` to go down in and `<grasp>_closed` to close to, looked up by its name cut back one
+  `_part` at a time (`side_right_090` finds `side_open` and `side_closed`). A name with a `right`
+  or `left` part (`side_right_090`) is only for that hand. The hand goes to a point `grasp_approach_m`
   (0.20) back along the fingers, re-reads the part's pose and re-aims if it moved (up to
   `reaim_max_shift_m`, 0.04; more aborts as knocked), then goes straight in on a Cartesian path, closes, and lifts straight
   up. It does not take a free-space plan, because a free-space plan may swing the fingers through
   the parts packed beside the target.
+
+  A grasp whose fingers are about level (`|x.z| < 0.5`) takes the part from the SIDE, like a hand
+  round a bottle: it is tried exactly as published (no tilts or leans: its origin is beside the
+  part's axis), only if its fingers point away from the robot (`side_grasp_min_forward`, 0.5,
+  the pelvis +x component), and the hand comes DOWN onto it from `grasp_approach_m` above, beside
+  the part, rather than in along the fingers. A place of something held that way lowers it from
+  above too, opens to the grasp's `<grasp>_open` (not `open`, which would swing the thumb through
+  the part) and rises straight back up. An object whose detection carries `<object>/symmetric/z`
+  (the tracker's `symmetric_z`) may be stood in a slot turned any way about its axis; the place
+  takes the turn nearest the hand's current orientation.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the

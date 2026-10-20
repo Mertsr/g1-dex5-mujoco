@@ -173,7 +173,7 @@ def _launch_setup(context, *args, **kwargs):
             "'lio' (the walled, asymmetric room for scoring LiDAR-inertial odometry "
             "against a known 5 m square), 'conveyor' (Mert's own world: a table, a "
             "conveyor belt, and three parts, with no pinned/perception variant of its own), or "
-            "'conveyor2' (the same world with an upright cylinder standing in for each BSH "
+            "'conveyor2' (the same world with a red drink can standing in for each BSH "
             "panel)."
         )
     if sensors:
@@ -474,7 +474,7 @@ def generate_launch_description():
                 "'perception' is the small bare room whose wall positions test_lidar_geometry "
                 "asserts against; use it for tests, not for looking at things. 'conveyor' is "
                 "Mert's own world: a table, a conveyor belt, and three parts. 'conveyor2' is "
-                "the same world with cylinders for the panels (g1_bringup/tools/make_conveyor2_scene.py).",
+                "the same world with drink cans for the panels (g1_bringup/tools/make_conveyor2_scene.py).",
             ),
             DeclareLaunchArgument(
                 "rviz",

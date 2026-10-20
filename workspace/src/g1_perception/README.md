@@ -22,10 +22,10 @@ ros2 launch g1_bringup bringup.launch.py world:=conveyor object_tracker:=true rv
 ros2 launch g1_bringup bringup.launch.py world:=conveyor moveit:=true manipulation:=true \
     object_source:=depth_tracker
 
-# world:=conveyor2 is the same line with an upright 45 mm cylinder instead of each BSH panel
+# world:=conveyor2 is the same line with a red drink can (66 x 129 mm) instead of each BSH panel
 # (g1_bringup/tools/make_conveyor2_scene.py); the tracker then loads
-# config/object_tracker_conveyor2.yaml (models/cylinder.stl, objects cylinder_0..3, top-down
-# grasps top_000..top_315 taken in g1.srdf's "top_open" pre-shape) by itself:
+# config/object_tracker_conveyor2.yaml (models/coke_can.stl, objects can_1..4, symmetric_z, side
+# grasps side_right_* / side_left_* taken in g1.srdf's side_open / side_closed) by itself:
 ros2 launch g1_bringup bringup.launch.py world:=conveyor2 moveit:=true manipulation:=true \
     object_source:=depth_tracker
 
@@ -143,6 +143,7 @@ Per object, besides the model, priors and offsets:
 | `instances: N` | Track up to N of this part at once, as `<name>_1` .. `<name>_N`, sharing one loaded model. Pick with `object_id: <name>` takes the nearest. |
 | `region: "<frame> xmin xmax ymin ymax zmin zmax [max_angle_deg [roll pitch yaw]]"` | Where the object can be. A fit outside it is dropped and the object searched for again, never reported. The pallet's keeps it on its line. |
 | `instance_separation` | How close two instances' poses may be (default 0.05 m). |
+| `symmetric_z: true` | The part is round about its own z (a can). Its yaw is reported facing the world frame's +x instead of whatever the fit gave, so its grasps and slots stay put, and the detection carries `<name>/symmetric/z` so a place may turn it freely about that axis. |
 
 **Swapping in scanned models.** Set `<object>.model` to the PLY, with `model_scale: 0.001` if it
 is in millimetres. PLY with faces is best, because normals then come from the faces and

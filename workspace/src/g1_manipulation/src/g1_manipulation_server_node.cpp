@@ -81,6 +81,63 @@ geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double di
     return out;
 }
 
+// The grasp's own name from an attempt label "<object>/grasp/<name> (tilt ..)".
+std::string graspNameOf(const std::string& label)
+{
+    std::string name  = label.substr(0, label.find(" ("));
+    const auto  slash = name.rfind("/grasp/");
+    return slash == std::string::npos ? name : name.substr(slash + 7);
+}
+
+// The hand state a grasp brings for `suffix` ("_open", "_closed"): "<name><suffix>", else the
+// name cut back one "_part" at a time, so "side_right_090" finds "side_right_open" or
+// "side_open". Empty when the hand has none of them.
+std::string shapeFor(
+    const std::string& grasp_name, const std::string& suffix, const std::vector<std::string>& shapes)
+{
+    std::string stem = grasp_name;
+    while (!stem.empty())
+    {
+        if (std::find(shapes.begin(), shapes.end(), stem + suffix) != shapes.end())
+        {
+            return stem + suffix;
+        }
+        const auto cut = stem.rfind('_');
+        if (cut == std::string::npos)
+        {
+            break;
+        }
+        stem.erase(cut);
+    }
+    return "";
+}
+
+// "side_right_090" is for the right hand only, "side_left_090" for the left; a name with neither
+// token is for both.
+bool graspIsForArm(const std::string& grasp_name, const std::string& arm)
+{
+    const auto has = [&](const std::string& token) {
+        return ("_" + grasp_name + "_").find("_" + token + "_") != std::string::npos;
+    };
+    if (has("right") && arm != "right")
+    {
+        return false;
+    }
+    if (has("left") && arm != "left")
+    {
+        return false;
+    }
+    return true;
+}
+
+// Fingers about level: the grasp takes the part from beside it, not from above.
+bool isSideGrasp(const geometry_msgs::msg::Pose& grasp)
+{
+    tf2::Quaternion q;
+    tf2::fromMsg(grasp.orientation, q);
+    return std::abs(tf2::Matrix3x3(q).getColumn(0).z()) < 0.5;
+}
+
 std::string GraspVariant::suffix() const
 {
     if (std::abs(tilt) < 1e-6 && std::abs(lean) < 1e-6 && !flipped)
@@ -205,6 +262,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
+    side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -910,6 +968,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::string                             arm_name;
     std::optional<geometry_msgs::msg::Pose> grasp_pose;
     geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
+    std::string                             open_shape = "open", closed_shape = "closed";
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
@@ -978,6 +1037,71 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             continue;
         }
         int reachable_here = 0;
+        const std::string cname          = graspNameOf(c.name);
+        // A grasp from the side (a hand around a can): tried exactly as published, by the hand
+        // its name says, and only with the fingers pointing away from the robot, so the right
+        // hand comes in on the part's right and the left on its left. Not tilted or leaned: its
+        // origin is the pinch point, beside the part's axis, and turning the hand about it would
+        // move the hand off the part. A round part publishes it at several turns about its axis
+        // instead. The hand comes down onto the part from above, along the world's vertical,
+        // with the fingers beside it, and lifts straight up after closing.
+        if (isSideGrasp(*c.pose))
+        {
+            if (forwardness(*c.pose) < side_grasp_min_forward_)
+            {
+                continue;
+            }
+            for (const std::string& a : arms_for(y))
+            {
+                if (!graspIsForArm(cname, a) ||
+                    static_cast<int>(attempts.size()) >= grasp_max_plans_)
+                {
+                    continue;
+                }
+                ArmContext ctx;
+                resolveArm(a, ctx);
+                usePinchFrame(ctx);
+                Attempt at{ c.name,
+                            a,
+                            *c.pose,
+                            handGoalFromGrasp(*c.pose, ctx.is_left),
+                            geometry_msgs::msg::Pose() };
+                at.pregrasp = at.grasp;
+                at.pregrasp.position.z += grasp_approach_m_;
+                ++ik_checked;
+                const auto grasp_ik = hasIk(ctx.arm_group, ctx.grasp_frame, at.grasp);
+                if (!grasp_ik)
+                {
+                    fail(
+                        Pick::Feedback::PHASE_PREGRASP,
+                        "move_group's /compute_ik did not answer (MoveIt error " +
+                            std::to_string(ik_broken_code_) +
+                            "); is move_group running with its kinematics plugin?");
+                    return;
+                }
+                if (*grasp_ik &&
+                    hasIk(ctx.arm_group, ctx.grasp_frame, at.pregrasp, &at.pregrasp_joints)
+                        .value_or(false))
+                {
+                    attempts.push_back(at);
+                    ++reachable_here;
+                }
+            }
+            if (reachable_here == 0 && static_cast<int>(attempts.size()) < grasp_max_plans_)
+            {
+                char where[160];
+                std::snprintf(
+                    where,
+                    sizeof where,
+                    "%s: not reachable from above, grasp at pelvis (%.2f, %.2f, %.2f) m",
+                    c.name.c_str(),
+                    c.pose->position.x,
+                    c.pose->position.y,
+                    c.pose->position.z);
+                unreachable += (unreachable.empty() ? "" : "; ") + std::string(where);
+            }
+            continue;
+        }
         // Also leaned about the grasp's z, the axis along the edge being pinched: the hand comes
         // in over the edge at an angle instead of straight down, as a person reaching for the far
         // side of a box does. Straight down needs the wrist right above the point, which costs
@@ -1017,6 +1141,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             }
             for (const std::string& a : arms_for(y))
             {
+                if (!graspIsForArm(cname, a))
+                {
+                    continue;
+                }
                 ArmContext ctx;
                 resolveArm(a, ctx);
                 usePinchFrame(ctx);
@@ -1108,40 +1236,23 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // off the table before the hand is around it. Reported separately from the arm move: a
         // hand that will not open is an unacquired or unpowered hand, not geometry.
         // A published grasp is a pinch: thumb across from the fingers before going down, if the
-        // hand has that shape ("pinch_open" in g1.srdf). A grasp can bring its own pre-shape: a
-        // named hand state "<grasp>_open" (the grasp's name, or that name less a trailing "_<n>"
-        // index, so "top_090" uses "top_open") is used instead when the hand has one -- a part
-        // too wide for pinch_open's opening goes down in it. The bounding-box grasp opens fully.
-        const auto& shapes    = hand_group->getNamedTargets();
-        const auto  has_shape = [&](const std::string& s) {
-            return std::find(shapes.begin(), shapes.end(), s) != shapes.end();
-        };
-        std::string open_shape = "open";
+        // hand has that shape ("pinch_open" in g1.srdf). A grasp can bring its own hand states:
+        // "<grasp>_open" to go down in and "<grasp>_closed" to close to (looked up by the grasp's
+        // name, cut back one "_part" at a time, so "side_right_090" uses "side_open"), when the
+        // hand has them -- a can is wrapped, not pinched. The bounding-box grasp opens fully.
+        const auto& shapes = hand_group->getNamedTargets();
+        open_shape         = "open";
+        closed_shape       = "closed";
         if (grasp_pose)
         {
-            std::string grasp_name = at.label.substr(0, at.label.find(" ("));
-            const auto  slash      = grasp_name.rfind("/grasp/");
-            if (slash != std::string::npos)
-            {
-                grasp_name = grasp_name.substr(slash + 7);
-            }
-            const auto underscore = grasp_name.rfind('_');
-            const bool indexed =
-                underscore != std::string::npos && underscore + 1 < grasp_name.size() &&
-                grasp_name.find_first_not_of("0123456789", underscore + 1) == std::string::npos;
-            const std::string unindexed = indexed ? grasp_name.substr(0, underscore) : grasp_name;
-            if (has_shape(grasp_name + "_open"))
-            {
-                open_shape = grasp_name + "_open";
-            }
-            else if (has_shape(unindexed + "_open"))
-            {
-                open_shape = unindexed + "_open";
-            }
-            else if (has_shape("pinch_open"))
-            {
-                open_shape = "pinch_open";
-            }
+            const std::string name       = graspNameOf(at.label);
+            const std::string own_open   = shapeFor(name, "_open", shapes);
+            const std::string own_closed = shapeFor(name, "_closed", shapes);
+            open_shape                   = !own_open.empty() ? own_open :
+                                           std::find(shapes.begin(), shapes.end(), "pinch_open") != shapes.end() ?
+                                                               "pinch_open" :
+                                                               "open";
+            closed_shape                 = own_closed.empty() ? "closed" : own_closed;
         }
         if (!moveToNamed(*hand_group, open_shape))
         {
@@ -1271,7 +1382,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     feedback->phase = Pick::Feedback::PHASE_GRASP;
     goal_handle->publish_feedback(feedback);
-    if (!moveToNamed(*hand_group, "closed"))
+    if (!moveToNamed(*hand_group, closed_shape))
     {
         fail(Pick::Feedback::PHASE_GRASP, "the hand did not close");
         return;
@@ -1333,6 +1444,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         std::lock_guard<std::mutex> lock(held_mutex_);
         held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
         held_arm_[object_id]   = arm_name;
+        held_release_[object_id] = grasp_pose ? open_shape : std::string("open");
+        held_yaw_free_[object_id] =
+            static_cast<bool>(findHypothesis(*detection, object_id + "/symmetric/z"));
     }
     result->success = true;
     result->message = "picked " + object_id + " with the " + arm_name + " hand";
@@ -1364,12 +1478,16 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // OBJECT at the target pose, and the hand goes wherever that puts it.
     std::optional<tf2::Transform> grasp_T_object;
     std::string                   picked_with;
+    std::string                   release_shape = "open";
+    bool                          yaw_free      = false;
     {
         std::lock_guard<std::mutex> lock(held_mutex_);
         if (const auto it = held_grasp_.find(held_id); it != held_grasp_.end())
         {
             grasp_T_object = it->second;
             picked_with    = held_arm_[held_id];
+            release_shape  = held_release_.count(held_id) ? held_release_[held_id] : "open";
+            yaw_free       = held_yaw_free_.count(held_id) && held_yaw_free_[held_id];
         }
     }
 
@@ -1468,8 +1586,43 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
             // held as it was picked. The approach is the grasp's own, in reverse for the retreat.
             tf2::Transform world_T_object;
             tf2::fromMsg(target, world_T_object);
+            if (yaw_free)
+            {
+                // A round part may stand in its slot turned any way about its axis: pick the turn
+                // that leaves the hand closest to how it is now, rather than wringing the wrist
+                // round to put the part's arbitrary x where the slot's is.
+                tf2::Quaternion now_q(0, 0, 0, 1);
+                const auto      now = arm_group->getCurrentPose(arm.grasp_frame);
+                tf2::fromMsg(now.pose.orientation, now_q);
+                double         best   = 1e9;
+                tf2::Transform best_T = world_T_object;
+                for (int k = 0; k < 24; ++k)
+                {
+                    tf2::Quaternion turn;
+                    turn.setRPY(0.0, 0.0, k * M_PI / 12.0);
+                    const tf2::Transform turned = world_T_object * tf2::Transform(turn);
+                    const tf2::Transform hand   = turned * grasp_T_object->inverse();
+                    const double         angle  = hand.getRotation().angleShortestPath(now_q);
+                    if (angle < best)
+                    {
+                        best   = angle;
+                        best_T = turned;
+                    }
+                }
+                world_T_object = best_T;
+            }
             tf2::toMsg(world_T_object * grasp_T_object->inverse(), place_goal);
-            preplace = backOff(place_goal, grasp_approach_m_);
+            // A part held from the side is set down from above and let go there, as it was
+            // picked: the approach runs along the world's vertical, not along the fingers.
+            if (isSideGrasp(place_goal))
+            {
+                preplace = place_goal;
+                preplace.position.z += grasp_approach_m_;
+            }
+            else
+            {
+                preplace = backOff(place_goal, grasp_approach_m_);
+            }
         }
         else
         {
@@ -1551,7 +1704,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
 
     feedback->phase = Place::Feedback::PHASE_RELEASE;
     goal_handle->publish_feedback(feedback);
-    if (!moveToNamed(*hand_group, "open"))
+    if (!moveToNamed(*hand_group, release_shape))
     {
         fail(Place::Feedback::PHASE_RELEASE, "the hand did not open");
         return;
@@ -1572,6 +1725,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         std::lock_guard<std::mutex> lock(held_mutex_);
         held_grasp_.erase(held_id);
         held_arm_.erase(held_id);
+        held_release_.erase(held_id);
+        held_yaw_free_.erase(held_id);
     }
 
     feedback->phase = Place::Feedback::PHASE_RETREAT;

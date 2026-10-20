@@ -75,6 +75,22 @@ std::string resolvePath(const std::string& path)
 
 const char* stateName(ObjectTracker::State s) { return s == ObjectTracker::State::kTracking ? "tracking" : "searching"; }
 
+// A part that is round about its own z (symmetric_z) gets whatever yaw ICP settled on. Keep its
+// axis and turn its x to the world's +x projected across that axis (+y if the axis lies along
+// x), so the reported yaw is the same every frame and from every viewpoint.
+Eigen::Isometry3f facingWorldX(Eigen::Isometry3f T)
+{
+    const Eigen::Vector3f z = T.linear().col(2).normalized();
+    Eigen::Vector3f       x = Eigen::Vector3f::UnitX() - z * z.x();
+    if (x.norm() < 1e-3f)
+    {
+        x = Eigen::Vector3f::UnitY() - z * z.y();
+    }
+    x.normalize();
+    T.linear() << x, z.cross(x), z;
+    return T;
+}
+
 }  // namespace
 
 ObjectTrackerNode::ObjectTrackerNode(const rclcpp::NodeOptions& options)
@@ -271,6 +287,7 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
         };
         const auto grasps = named("grasps");
         const auto slots  = named("slots");
+        const bool symmetric_z = declare_parameter<bool>(name + ".symmetric_z", false);
         if (c.priors.empty() && !c.params.global_fallback)
         {
             throw std::runtime_error("object '" + name + "' has neither priors nor global_fallback: it can never be found");
@@ -294,6 +311,7 @@ std::vector<ObjectConfig> ObjectTrackerNode::readObjects()
             mesh_scales_.push_back(inst.model.scale);
             grasps_.push_back(grasps);
             slots_.push_back(slots);
+            symmetric_z_.push_back(symmetric_z);
             out.push_back(std::move(inst));
         }
     }
@@ -471,6 +489,11 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
             last_verified_[oi].reset();
             continue;
         }
+        if (symmetric_z_[oi])
+        {
+            world_T_output = facingWorldX(world_T_output);
+            cam_T_output   = world_T_cam->inverse() * world_T_output;
+        }
         const Eigen::Isometry3f pose = out_T_cam * cam_T_output;
         vision_msgs::msg::Detection3D d;
         d.header = array.header;
@@ -502,6 +525,16 @@ void ObjectTrackerNode::onDepth(const sensor_msgs::msg::Image::SharedPtr msg)
                     tf_broadcaster_->sendTransform(t);
                 }
             }
+        }
+        if (symmetric_z_[oi])
+        {
+            // Tells a consumer the part may be turned freely about its z (a place may stand a
+            // can in its slot whichever way suits the hand). Its pose is the object's own.
+            vision_msgs::msg::ObjectHypothesisWithPose sym;
+            sym.hypothesis.class_id = r.name + "/symmetric/z";
+            sym.hypothesis.score    = score;
+            sym.pose.pose           = toPose(pose);
+            d.results.push_back(sym);
         }
         Eigen::Isometry3f centre = pose;
         centre.translation()     = pose * r.box_centre;
@@ -655,7 +688,11 @@ void ObjectTrackerNode::publishDebug(const sensor_msgs::msg::Image& msg, const D
                 // Each grasp as the hand: the approach line (yellow) coming in along the grasp
                 // frame's x, the four fingers (red, -y) and the thumb (blue, +y),
                 // the palm bar (white), and a cyan cross where the hand closes.
-                const Eigen::Isometry3f world_T_output = world_T_model * multi_->config(i).model_T_output;
+                Eigen::Isometry3f world_T_output = world_T_model * multi_->config(i).model_T_output;
+                if (symmetric_z_[i])
+                {
+                    world_T_output = facingWorldX(world_T_output);  // as reported on /objects
+                }
                 for (const auto& g : grasps_[i])
                 {
                     const Eigen::Isometry3f T = world_T_output * g.pose;

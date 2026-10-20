@@ -1,7 +1,7 @@
 # The model-based tracker for world:=conveyor2 (g1_bringup/mjcf/g1_conveyor2_scene.xml): the
-# conveyor world with the BSH panels replaced by an upright cylinder, 45 mm across and 104.6 mm
-# tall (written by g1_bringup/tools/make_conveyor2_scene.py, which also writes this config's
-# model, models/cylinder.stl). Everything but the part is object_tracker_conveyor.yaml unchanged.
+# conveyor world with the BSH panels replaced by a red drink can, 66 mm across and 129 mm tall
+# (g1_bringup/tools/make_conveyor2_scene.py, from this config's model, models/coke_can.stl).
+# Everything but the part is object_tracker_conveyor.yaml unchanged.
 # bringup.launch.py picks this file by default when world:=conveyor2.
 #
 # Pose strings: "<frame> x y z [roll pitch yaw]" (metres, radians, RPY about fixed axes as in
@@ -27,7 +27,7 @@ g1_object_tracker:
 
     # Fitted in this order, and each one's surface is removed from the depth before the next
     # is fitted: the pallet first, so a part standing in a nest is not fitted to the pallet.
-    objects: ["pallet", "cylinder"]
+    objects: ["pallet", "can"]
 
     pallet:
       # Swap in the scanned PLY here (model_scale 0.001 if it is in millimetres). Its frame must
@@ -51,28 +51,30 @@ g1_object_tracker:
       region: "odom 0.10 1.00 0.57 0.63 0.74 0.79 5"
       # Where the part's BODY frame sits when placed in each nest, in the pallet's frame. Published
       # as pallet/slot/nest_<k> on /objects; Place with surface_object_id "pallet/slot/nest_2"
-      # puts the held cylinder exactly there.
+      # puts the held can exactly there.
       slots:
-        # The cylinder standing on the pallet plate (top z 0.01) at each nest's centre, between
-        # its end cradles: origin half its height above the plate (pallet z 0.0622), inside the
-        # nest site the simulator's conveyor handler watches, so a placed part indexes the
-        # pallet. Measured by dropping the part into nest 1 in the simulator; the others are the
-        # nest sites' x.
+        # The can standing on the pallet plate (top z 0.01) at each nest's centre, between its
+        # end cradles: its origin (52.3 mm above its bottom) at pallet z 0.0622, inside the nest
+        # site the simulator's conveyor handler watches, so a placed can indexes the pallet.
+        # Measured by dropping the can into nest 1 in the simulator; the others are the nest
+        # sites' x. The can is round, so Place stands it in whichever turn suits the hand.
         - "nest_1  0.2259 0.0 0.0622 0 0 0"
         - "nest_2  0.0753 0.0 0.0622 0 0 0"
         - "nest_3  -0.0753 0.0 0.0622 0 0 0"
         - "nest_4  -0.2259 0.0 0.0622 0 0 0"
 
-    cylinder:
-      model: package://g1_perception/models/cylinder.stl
+    can:
+      model: package://g1_perception/models/coke_can.stl
       model_scale: 1.0
       instances: 4
       prior_jitter: "0.02 0.2"
-      # The tray's part_tray_1..4 as they rest (standing on the floor, top z 0.71; origin at the
-      # centre, 52.3 mm up), then the four nests relative to the tracked pallet. Measured by
-      # settling the scene. The model's frame IS the body frame, so no output offset. Turned
-      # about its axis the cylinder looks the same, so the yaw the tracker reports is arbitrary;
-      # the grasps below cover every yaw for that reason.
+      # Round about its own axis: whatever yaw a fit settles on is meaningless, so the can is
+      # reported turned to face odom's +x (and says so, "can_N/symmetric/z", for Place). Its
+      # grasps below are therefore fixed in odom, not spun about by the fit.
+      symmetric_z: true
+      # The tray's part_tray_1..4 as they rest (standing on the floor, top z 0.71; origin 52.3 mm
+      # above the bottom), then the four nests relative to the tracked pallet. Measured by
+      # settling the scene. The model's frame IS the body frame, so no output offset.
       priors:
         - "odom 1.605 -0.80 0.7622 0 0 0"
         - "odom 1.755 -0.80 0.7622 0 0 0"
@@ -83,26 +85,49 @@ g1_object_tracker:
         - "pallet -0.0753 0.0 0.0622 0 0 0"
         - "pallet -0.2259 0.0 0.0622 0 0 0"
       output_offset: "0 0 0"
-      # top_<deg>: from straight above, on the axis, pinched across the diameter 25 mm below the
-      # top face (body z +0.0273), the thumb toward body yaw <deg>. Pinch frame as usual: x along
-      # the fingers (straight down), thumb toward +y. Eight yaws because the reported yaw means
-      # nothing for a cylinder: Pick tries them all (and its tilts and leans of each) and plans
-      # to whichever the arm reaches; at the tray, the ones closing along the tray's y keep the
-      # fingers off the stop bars between the parts.
+      # side_<hand>_<deg>: the can held like a bottle, from the side, halfway up: the palm
+      # against it, the four fingers wrapped round its far side and the thumb swung across
+      # behind it. The right hand takes it on its right side, the left hand on its left (the
+      # name says which; Pick gives each grasp only to that hand), fingers pointing <deg> from
+      # the can's +x, i.e. odom +x at 0. Pick tries only those whose fingers point away from the
+      # robot (side_grasp_min_forward) and comes down onto the can from above, beside it,
+      # in g1.srdf's "side_open"; it closes to "side_closed" and lifts straight up.
       #
-      # The hand goes down in g1.srdf's "top_open" (Pick takes "<grasp>_open" when the hand has
-      # it): pinch_open's 3.7 cm across would land on the 45 mm top face. Checked in MuJoCo for
-      # both hands: top_open passes over the part, and "closed" pinches it between thumb and
-      # index/middle at the height above.
+      # Pinch frame as usual (x along the fingers, level; y toward the curl side for the right
+      # hand), at 32 mm along the fingers past the can's axis, 28.5 mm off it on the curl side
+      # and 20 mm above the can's origin. The left hand is the mirror image, on the can's other
+      # side: Pick gives the left hand a published grasp turned half a turn about x (right for a
+      # pinch, where that just swaps thumb and fingers), so side_left_* are published already
+      # turned (roll pi) and the left pinch frame ends up level, as the mirror needs. Found in MuJoCo with the
+      # RH56E2's real finger pads and the simulator's hand gains (kp 1.5, 1 N m): from 18 cm above,
+      # both hands come down without touching the can, close round it (palm, all four fingers
+      # and the thumb in contact) and lift it 10 cm, the can turning 3-6 degrees in the hand;
+      # still so with the can 5 mm off in x or y or 10 mm in z.
       grasps:
-        - "top_000  0.0 0.0 0.0273  1.5708 1.5708 0.0"
-        - "top_045  0.0 0.0 0.0273  0.7854 1.5708 0.0"
-        - "top_090  0.0 0.0 0.0273  0.0 1.5708 0.0"
-        - "top_135  0.0 0.0 0.0273  -0.7854 1.5708 0.0"
-        - "top_180  0.0 0.0 0.0273  -1.5708 1.5708 0.0"
-        - "top_225  0.0 0.0 0.0273  -2.3562 1.5708 0.0"
-        - "top_270  0.0 0.0 0.0273  3.1416 1.5708 0.0"
-        - "top_315  0.0 0.0 0.0273  2.3562 1.5708 0.0"
+        - "side_right_000  0.0320 0.0285 0.0200  0 0 0.0000"
+        - "side_right_030  0.0135 0.0407 0.0200  0 0 0.5236"
+        - "side_right_060  -0.0087 0.0420 0.0200  0 0 1.0472"
+        - "side_right_090  -0.0285 0.0320 0.0200  0 0 1.5708"
+        - "side_right_120  -0.0407 0.0135 0.0200  0 0 2.0944"
+        - "side_right_150  -0.0420 -0.0087 0.0200  0 0 2.6180"
+        - "side_right_180  -0.0320 -0.0285 0.0200  0 0 3.1416"
+        - "side_right_210  -0.0135 -0.0407 0.0200  0 0 -2.6180"
+        - "side_right_240  0.0087 -0.0420 0.0200  0 0 -2.0944"
+        - "side_right_270  0.0285 -0.0320 0.0200  0 0 -1.5708"
+        - "side_right_300  0.0407 -0.0135 0.0200  0 0 -1.0472"
+        - "side_right_330  0.0420 0.0087 0.0200  0 0 -0.5236"
+        - "side_left_000  0.0320 -0.0285 0.0200  3.1416 0 0.0000"
+        - "side_left_030  0.0420 -0.0087 0.0200  3.1416 0 0.5236"
+        - "side_left_060  0.0407 0.0135 0.0200  3.1416 0 1.0472"
+        - "side_left_090  0.0285 0.0320 0.0200  3.1416 0 1.5708"
+        - "side_left_120  0.0087 0.0420 0.0200  3.1416 0 2.0944"
+        - "side_left_150  -0.0135 0.0407 0.0200  3.1416 0 2.6180"
+        - "side_left_180  -0.0320 0.0285 0.0200  3.1416 0 3.1416"
+        - "side_left_210  -0.0420 0.0087 0.0200  3.1416 0 -2.6180"
+        - "side_left_240  -0.0407 -0.0135 0.0200  3.1416 0 -2.0944"
+        - "side_left_270  -0.0285 -0.0320 0.0200  3.1416 0 -1.5708"
+        - "side_left_300  -0.0087 -0.0420 0.0200  3.1416 0 -1.0472"
+        - "side_left_330  0.0135 -0.0407 0.0200  3.1416 0 -0.5236"
 
     # Shared by every object.
     tracking:
