@@ -322,6 +322,30 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     {
         throw std::runtime_error("scoop_support_offset needs exactly 3 entries");
     }
+    // How the other hand holds it. "clamp" (default): a second scoop in the air, on the same
+    // edge's other half -- palm up, fingers in under the edge, thumb down on top, closed -- so the
+    // part is clamped by both hands' fingers, not just lying on one. In MuJoCo (sim gains) a 2 N
+    // push at the panel's end moved it 5 mm / 4 degrees and it came back to within 3 mm / 2.5;
+    // on a flat hand under it ("support") a push of that kind lifted it off the hand and left it
+    // 44 degrees out. Where it goes: scoop_clamp_offset from the gripping hand's lifted grasp
+    // frame (heading, sideways toward the middle, up; measured on the panel: the edge's other
+    // half, 5 cm lower because the part sags until the second hand has it), fingers pitched
+    // scoop_clamp_pitch_deg down; it comes in along its fingers from scoop_slide_m in front.
+    // Holds within +-1-2 cm of that pose. "none": one hand only.
+    scoop_second_hand_  = declare_parameter<std::string>("scoop_second_hand", "clamp");
+    scoop_two_hand_     = scoop_two_hand_ && scoop_second_hand_ != "none";
+    scoop_clamp_offset_ = declare_parameter<std::vector<double>>(
+        "scoop_clamp_offset",
+        std::vector<double>{ 0.002, 0.352, -0.050 });
+    scoop_clamp_pitch_rad_ =
+        declare_parameter<double>("scoop_clamp_pitch_deg", 20.0) * M_PI / 180.0;
+    if (scoop_clamp_offset_.size() != 3 ||
+        (scoop_second_hand_ != "clamp" && scoop_second_hand_ != "support" &&
+         scoop_second_hand_ != "none"))
+    {
+        throw std::runtime_error(
+            "scoop_clamp_offset needs 3 entries; scoop_second_hand is clamp, support or none");
+    }
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -1756,13 +1780,15 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     allowHandContact(arm, { "<octomap>", object_id }, false);
 
-    // A scooped part hangs from one edge and sags; the other hand comes under its far half, palm
-    // up, and lifts that side level, then the two lift together. If any of it fails the part
-    // stays held in the one hand, as it is now: a support that does not happen is a worse carry,
-    // dropping the part would be worse still.
+    // A scooped part hangs from one edge and sags; the other hand takes its other half too
+    // (scoop_second_hand): "clamp", a second scoop in the air, fingers under the edge and the
+    // thumb on top, closed; "support", flat under it, palm up. The two then lift together. If any
+    // of it fails the part stays held in the one hand, as it is now: a second hand that does not
+    // get there is a worse carry, dropping the part would be worse still.
     std::string    support_name;
     tf2::Transform grasp_T_support;
     std::string    support_note;
+    const bool     clamp = scoop_second_hand_ == "clamp";
     if (entry_goal && scoop_two_hand_)
     {
         support_name = arm_name == "left" ? "right" : "left";
@@ -1787,55 +1813,79 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         {
             side = -side;
         }
-        const tf2::Vector3 at =
+        const std::vector<double>& off = clamp ? scoop_clamp_offset_ : scoop_support_offset_;
+        const tf2::Vector3         at =
             tf2::Vector3(lifted.position.x, lifted.position.y, lifted.position.z) +
-            heading * scoop_support_offset_[0] + side * scoop_support_offset_[1] +
-            up * scoop_support_offset_[2];
-        // Palm up, fingers along the heading: the same frame the scoop's grasps are written in,
-        // level.
-        const tf2::Vector3   across = heading.cross(up);
-        const tf2::Matrix3x3 rot(
-            heading.x(),
-            up.x(),
-            across.x(),
-            heading.y(),
-            up.y(),
-            across.y(),
-            heading.z(),
-            up.z(),
-            across.z());
+            heading * off[0] + side * off[1] + up * off[2];
+        // Palm up, fingers along the heading (the frame the scoop's grasps are written in: x the
+        // fingers, y out of the palm), pitched fingers-down by the clamp's pitch; level for the
+        // support.
+        const double       pitch = clamp ? scoop_clamp_pitch_rad_ : 0.0;
+        const tf2::Vector3 fx    = heading * std::cos(pitch) - up * std::sin(pitch);
+        const tf2::Vector3 fy    = heading * std::sin(pitch) + up * std::cos(pitch);
+        const tf2::Vector3 fz    = fx.cross(fy);
+        const tf2::Matrix3x3
+                        rot(fx.x(), fy.x(), fz.x(), fx.y(), fy.y(), fz.y(), fx.z(), fy.z(), fz.z());
         tf2::Quaternion sq;
         rot.getRotation(sq);
-        geometry_msgs::msg::Pose palm_up;
-        palm_up.position.x                        = at.x();
-        palm_up.position.y                        = at.y();
-        palm_up.position.z                        = at.z();
-        palm_up.orientation                       = tf2::toMsg(sq);
-        const geometry_msgs::msg::Pose under_part = handGoalFromGrasp(palm_up, support.is_left);
-        geometry_msgs::msg::Pose       below      = under_part;
-        below.position.z -= scoop_support_drop_m_;
-        geometry_msgs::msg::Pose in_front = below;
-        in_front.position.x -= heading.x() * scoop_support_back_m_;
-        in_front.position.y -= heading.y() * scoop_support_back_m_;
-        geometry_msgs::msg::Pose both_lifted = lifted;
+        geometry_msgs::msg::Pose hand_at;
+        hand_at.position.x                         = at.x();
+        hand_at.position.y                         = at.y();
+        hand_at.position.z                         = at.z();
+        hand_at.orientation                        = tf2::toMsg(sq);
+        const geometry_msgs::msg::Pose on_part     = handGoalFromGrasp(hand_at, support.is_left);
+        geometry_msgs::msg::Pose       both_lifted = lifted;
         both_lifted.position.z += scoop_support_lift_m_;
-        geometry_msgs::msg::Pose support_lifted = under_part;
+        geometry_msgs::msg::Pose support_lifted = on_part;
         support_lifted.position.z += scoop_support_lift_m_;
 
-        bool supported = false;
-        bool under     = false;
-        if (support_arm && support_hand && moveToNamed(*support_hand, "open") &&
-            moveTo(*support_arm, in_front, support.grasp_frame, "support: in front of the part"))
+        bool held2    = false;
+        bool touching = false;
+        if (clamp)
         {
-            allowHandContact(support, { "<octomap>", object_id }, true);
-            under =
-                moveLinear(*support_arm, below, support.grasp_frame, "support: in under the part");
-            supported =
-                under &&
-                moveLinear(*support_arm, under_part, support.grasp_frame, "support: up to the part") &&
-                moveBothTo(arm, both_lifted, support, support_lifted, "lift in two hands");
+            // In front of the edge's other half, at its height, fingers aimed at it; in along
+            // them, close, lift together.
+            const geometry_msgs::msg::Pose in_front = slideBack(on_part, scoop_slide_m_);
+            if (support_arm && support_hand && moveToNamed(*support_hand, "scoop_open") &&
+                moveTo(*support_arm, in_front, support.grasp_frame, "clamp: in front of the edge"))
+            {
+                allowHandContact(support, { "<octomap>", object_id }, true);
+                touching = true;
+                held2    = moveLinear(
+                            *support_arm,
+                            on_part,
+                            support.grasp_frame,
+                            "clamp: in under the edge") &&
+                        moveToNamed(*support_hand, "scoop_closed") &&
+                        moveBothTo(arm, both_lifted, support, support_lifted, "lift in two hands");
+            }
         }
-        if (supported)
+        else
+        {
+            geometry_msgs::msg::Pose below = on_part;
+            below.position.z -= scoop_support_drop_m_;
+            geometry_msgs::msg::Pose in_front = below;
+            in_front.position.x -= heading.x() * scoop_support_back_m_;
+            in_front.position.y -= heading.y() * scoop_support_back_m_;
+            if (support_arm && support_hand && moveToNamed(*support_hand, "open") &&
+                moveTo(*support_arm, in_front, support.grasp_frame, "support: in front of the part"))
+            {
+                allowHandContact(support, { "<octomap>", object_id }, true);
+                touching = moveLinear(
+                    *support_arm,
+                    below,
+                    support.grasp_frame,
+                    "support: in under the part");
+                held2 = touching &&
+                        moveLinear(
+                            *support_arm,
+                            on_part,
+                            support.grasp_frame,
+                            "support: up to the part") &&
+                        moveBothTo(arm, both_lifted, support, support_lifted, "lift in two hands");
+            }
+        }
+        if (held2)
         {
             tf2::Transform world_T_grip, world_T_support;
             tf2::fromMsg(both_lifted, world_T_grip);
@@ -1843,29 +1893,50 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             grasp_T_support = world_T_grip.inverse() * world_T_support;
             RCLCPP_INFO(
                 get_logger(),
-                "pick %s: held in two hands (%s supporting)",
+                "pick %s: held in two hands (the %s hand %s)",
                 object_id.c_str(),
-                support_name.c_str());
+                support_name.c_str(),
+                clamp ? "clamping the other half" : "supporting");
         }
         else
         {
             RCLCPP_WARN(
                 get_logger(),
-                "pick %s: the %s hand could not support it; held in one hand",
+                "pick %s: the %s hand could not take the other half; held in one hand",
                 object_id.c_str(),
                 support_name.c_str());
-            if (support_arm && under)
+            if (support_arm && touching)
             {
                 const geometry_msgs::msg::Pose now =
                     support_arm->getCurrentPose(support.grasp_frame).pose;
-                geometry_msgs::msg::Pose down = now;
-                down.position.z -= scoop_support_drop_m_;
-                moveLinear(*support_arm, down, support.grasp_frame, "support: back down");
-                geometry_msgs::msg::Pose out = slideBack(down, scoop_support_back_m_);
-                moveLinear(*support_arm, out, support.grasp_frame, "support: back out");
+                if (clamp)
+                {
+                    // Open, and back out along the fingers the way it came in.
+                    if (support_hand)
+                    {
+                        moveToNamed(*support_hand, "scoop_open");
+                    }
+                    moveLinear(
+                        *support_arm,
+                        slideBack(now, scoop_slide_m_),
+                        support.grasp_frame,
+                        "clamp: back out");
+                }
+                else
+                {
+                    geometry_msgs::msg::Pose down = now;
+                    down.position.z -= scoop_support_drop_m_;
+                    moveLinear(*support_arm, down, support.grasp_frame, "support: back down");
+                    moveLinear(
+                        *support_arm,
+                        slideBack(down, scoop_support_back_m_),
+                        support.grasp_frame,
+                        "support: back out");
+                }
             }
             allowHandContact(support, { "<octomap>", object_id }, false);
-            support_note = "; the " + support_name + " hand could not support it, held in one hand";
+            support_note =
+                "; the " + support_name + " hand could not take the other half, held in one hand";
             support_name.clear();
         }
     }
@@ -1885,20 +1956,23 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             static_cast<bool>(findHypothesis(*detection, object_id + "/symmetric/z"));
         if (!support_name.empty())
         {
-            held_support_arm_[object_id] = support_name;
-            held_support_T_[object_id]   = grasp_T_support;
+            held_support_arm_[object_id]    = support_name;
+            held_support_T_[object_id]      = grasp_T_support;
+            held_support_clamps_[object_id] = clamp;
         }
         else
         {
             held_support_arm_.erase(object_id);
             held_support_T_.erase(object_id);
+            held_support_clamps_.erase(object_id);
         }
     }
     result->success = true;
-    result->message =
-        "picked " + object_id + " with the " + arm_name + " hand" +
-        (support_name.empty() ? std::string() : ", the " + support_name + " hand under it") +
-        support_note;
+    result->message = "picked " + object_id + " with the " + arm_name + " hand" +
+                      (support_name.empty() ? std::string() :
+                                              (", the " + support_name + " hand " +
+                                               (clamp ? "clamping the other half" : "under it"))) +
+                      support_note;
     goal_handle->succeed(result);
 }
 
@@ -1932,6 +2006,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     bool                          scooped       = false;
     std::string                   support_name;
     tf2::Transform                grasp_T_support;
+    bool                          clamped = false;
     {
         std::lock_guard<std::mutex> lock(held_mutex_);
         if (const auto it = held_grasp_.find(held_id); it != held_grasp_.end())
@@ -1945,6 +2020,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
             {
                 support_name    = sit->second;
                 grasp_T_support = held_support_T_[held_id];
+                clamped = held_support_clamps_.count(held_id) && held_support_clamps_[held_id];
             }
         }
     }
@@ -1969,8 +2045,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     MoveGroup* arm_group  = groupFor(arm.arm_group);
     MoveGroup* hand_group = groupFor(arm.hand_group);
 
-    // Held in two hands (a scoop and the other hand under it): the supporting hand moves with
-    // the gripping one, at the pose it was picked with relative to it.
+    // Held in two hands (a scoop and the other hand clamping or under it): the second hand moves
+    // with the gripping one, at the pose it was picked with relative to it.
     ArmContext support;
     MoveGroup* support_arm = nullptr;
     if (!support_name.empty() && resolveArm(support_name, support))
@@ -2177,8 +2253,57 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
 
     feedback->phase = Place::Feedback::PHASE_LOWER;
     goal_handle->publish_feedback(feedback);
-    // In two hands: down together to support_release_height_m above the target, then the
-    // supporting hand out from under the part -- set down on it, the part would rest on that
+    // Clamped in two hands: down together all the way, the last support_release_height_m on
+    // their own short move so it is near straight down; then the clamping hand opens and slides
+    // out from under the edge while the gripping one still holds the part where it was put, and
+    // goes up. The gripping hand releases as for one hand.
+    bool lowered = false;
+    if (support_arm && clamped)
+    {
+        allowHandContact(arm, touchables, true);
+        allowHandContact(support, touchables, true);
+        geometry_msgs::msg::Pose near_goal = place_goal;
+        near_goal.position.z += support_release_height_m_;
+        if (!moveBothTo(arm, near_goal, support, support_at(near_goal), "lower in two hands") ||
+            !moveBothTo(arm, place_goal, support, support_at(place_goal), "set down in two hands"))
+        {
+            fail(Place::Feedback::PHASE_LOWER, "could not lower the part in two hands");
+            return;
+        }
+        lowered                              = true;
+        MoveGroup*                     shand = groupFor(support.hand_group);
+        const geometry_msgs::msg::Pose now = support_arm->getCurrentPose(support.grasp_frame).pose;
+        geometry_msgs::msg::Pose       out = slideBack(now, scoop_slide_m_);
+        if (!shand || !moveToNamed(*shand, "scoop_open") ||
+            !moveLinear(*support_arm, out, support.grasp_frame, "clamp: slide out"))
+        {
+            fail(
+                Place::Feedback::PHASE_RELEASE,
+                "could not take the clamping hand out from under the part");
+            return;
+        }
+        out.position.z += scoop_hover_m_;
+        if (!held_id.empty())
+        {
+            allowHandContact(support, { held_id }, false);
+        }
+        if (!moveLinear(*support_arm, out, support.grasp_frame, "clamp: up"))
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "place: the clamping hand could not rise clear; left where it is");
+        }
+        allowHandContact(support, touchables, false);
+        {
+            std::lock_guard<std::mutex> lock(held_mutex_);
+            held_support_arm_.erase(held_id);
+            held_support_T_.erase(held_id);
+            held_support_clamps_.erase(held_id);
+        }
+        support_arm = nullptr;
+    }
+    // Supported in two hands: down together to support_release_height_m above the target, then
+    // the supporting hand out from under the part -- set down on it, the part would rest on that
     // hand -- and the gripping hand takes it the rest of the way alone.
     if (support_arm)
     {
@@ -2207,14 +2332,15 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
             std::lock_guard<std::mutex> lock(held_mutex_);
             held_support_arm_.erase(held_id);
             held_support_T_.erase(held_id);
+            held_support_clamps_.erase(held_id);
         }
         support_arm = nullptr;
     }
 
     // Now the hand may touch the surface: the descent ends in contact by definition.
     allowHandContact(arm, touchables, true);
-    if (!(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower")
-                         : moveTo(*arm_group, place_goal, arm.grasp_frame, "lower")))
+    if (!lowered && !(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower") :
+                                       moveTo(*arm_group, place_goal, arm.grasp_frame, "lower")))
     {
         fail(Place::Feedback::PHASE_LOWER, "could not lower onto the target");
         return;
@@ -2248,6 +2374,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         held_scoop_.erase(held_id);
         held_support_arm_.erase(held_id);
         held_support_T_.erase(held_id);
+        held_support_clamps_.erase(held_id);
     }
 
     feedback->phase = Place::Feedback::PHASE_RETREAT;

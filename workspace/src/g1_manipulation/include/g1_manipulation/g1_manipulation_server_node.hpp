@@ -289,8 +289,14 @@ private:
     /// gripping arm's (both as commanded), so a place moves the two together.
     std::map<std::string, std::string>    held_support_arm_;
     std::map<std::string, tf2::Transform> held_support_T_;
-    /// A scooped part is then held from underneath by the other hand too (see the parameters).
+    /// ... and whether that hand clamps the part too (a second scoop) rather than only lying under it.
+    std::map<std::string, bool> held_support_clamps_;
+    /// A scooped part is then held by the other hand too (see the parameters): "clamp", a second
+    /// scoop on the same edge in the air; "support", a flat hand under it; "none".
     bool                scoop_two_hand_{ true };
+    std::string         scoop_second_hand_{ "clamp" };
+    std::vector<double> scoop_clamp_offset_{ 0.002, 0.352, -0.050 };
+    double              scoop_clamp_pitch_rad_{ 0.349 };
     std::vector<double> scoop_support_offset_{ -0.02, 0.314, 0.017 };
     double              scoop_support_drop_m_{ 0.08 };
     double              scoop_support_back_m_{ 0.12 };

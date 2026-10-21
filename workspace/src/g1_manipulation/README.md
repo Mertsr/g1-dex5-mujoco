@@ -112,20 +112,34 @@ result:
   the surface (still allowed to touch the part), and only then rises.
 
   A scooped part hangs from one edge and sags along its length (the 0.6 m panel: 9-20 degrees;
-  the fingers' 1 Nm cannot hold it level). With `scoop_two_hand` (on) the OTHER hand then holds it
-  from underneath: it opens, plans to a point `scoop_support_back_m` (0.12) in front of and
-  `scoop_support_drop_m` (0.08) below its support pose, slides in under the part and rises into
-  it, palm up, fingers along the scoop's heading; the two arms then lift `scoop_support_lift_m`
-  (0.05) more together, as one `both_arms` trajectory. The support pose is `scoop_support_offset`
-  (-0.02, 0.314, 0.017 m) from the gripping hand's lifted grasp frame: along its fingers' level
-  heading, sideways toward the part's middle, and up -- under the panel's other half, 1.7 cm
-  above its levelled underside so it presses that side up level. In MuJoCo (sim arm gains,
-  gravity compensation) that takes the sag from 9 to 2-3 degrees and the swing under 0.2, for
-  stances 15 cm apart and the support pose off by 1-2 cm. If the support fails the part stays in
-  the one hand and the result says so. A place of a part held so moves both hands together
-  (straight in joint space: walk to the target first, keep the carry short) down to
-  `support_release_height_m` (0.025) above the target, takes the supporting hand down 1 cm and
-  out from under, and sets the part down with the gripping hand alone.
+  the fingers' 1 Nm cannot hold it level). With `scoop_two_hand` (on) the OTHER hand then takes
+  its other half too, in the way `scoop_second_hand` names:
+
+  - `clamp` (default): a second scoop, in the air. The hand opens to `scoop_open`, plans to a
+    point `scoop_slide_m` in front of its clamp pose, slides in along its fingers under the edge,
+    closes to `scoop_closed` (fingers under, thumb on top), and the two arms lift
+    `scoop_support_lift_m` (0.05) more together as one `both_arms` trajectory. The clamp pose is
+    `scoop_clamp_offset` (0.002, 0.352, -0.050 m) from the gripping hand's lifted grasp frame --
+    along its fingers' level heading, sideways toward the part's middle, up -- with the fingers
+    pitched `scoop_clamp_pitch_deg` (20) down: the same edge's other half, 5 cm lower because the
+    part sags until the second hand has it. In MuJoCo (sim arm gains, gravity compensation):
+    roll 0.6 degrees, sag ~5.5, a carry moved it 3 mm; a 2 N push down at the panel's end moved
+    it 5.6 mm / 4 degrees and it came back to 3 mm / 2.6, a 5 N push up 22 mm / 15 back to
+    5 mm / 3. It held for three stances and the clamp pose off by 1-2 cm. A place lowers both
+    hands together (straight in joint space: walk to the target first, keep the carry short) to
+    `support_release_height_m` (0.025) above the target and then onto it, opens the clamping
+    hand and slides it out along its fingers while the gripping one still holds the part, lifts
+    it `scoop_hover_m`, then releases the gripping hand as for one hand.
+  - `support`: a flat hand, palm up, under the other half. It plans to a point
+    `scoop_support_back_m` (0.12) in front of and `scoop_support_drop_m` (0.08) below its pose
+    (`scoop_support_offset`, -0.02, 0.314, 0.017 m, the same axes; 1.7 cm above the levelled
+    underside), slides in under and rises into it; the two then lift together. Sag 2-3 degrees,
+    but nothing holds the part down on that hand: the same 5 N push up lifted it off and left it
+    44 degrees out. A place lowers both to `support_release_height_m` above the target, takes the
+    supporting hand down 1 cm and out, and sets the part down with the gripping hand alone.
+  - `none`: one hand only.
+
+  If the second hand fails the part stays in the one hand and the result says so.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the
