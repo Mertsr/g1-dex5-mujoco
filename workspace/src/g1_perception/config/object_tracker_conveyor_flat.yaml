@@ -1,7 +1,7 @@
 # The model-based tracker for world:=conveyor_flat (g1_bringup/mjcf/g1_conveyor_flat_scene.xml):
 # the conveyor line with its panels on a plain table, no tray rim or stop bars, as on the real
-# line. object_tracker_conveyor.yaml exactly, plus the scoop grasps (see `grasps` below), which
-# need the table bare in front of the panel. bringup.launch.py picks this file by default when
+# line. object_tracker_conveyor.yaml exactly, except that the panel's grasps are the scoops (see
+# `grasps` below), which need the table bare in front of the panel. bringup.launch.py picks this file by default when
 # world:=conveyor_flat. Loaded by g1_perception/launch/object_tracker.launch.py.
 #
 # Pose strings: "<frame> x y z [roll pitch yaw]" (metres, radians, RPY about fixed axes as in
@@ -134,8 +134,11 @@ g1_object_tracker:
       # 0.3 kg panel 10 cm and holds it, the panel tipping 5-30 degrees in the hand. Tolerance
       # measured along the edge: +-2 cm (near, right hand) to +-5 cm (far, left hand); 5 mm in
       # height. The pose is the pinch frame's, as for edge_high.
+      #
+      # Only the scoops here: edge_high (the top pinch of object_tracker_conveyor.yaml) does not
+      # hold the panel, and with it listed a pick whose scoops are out of reach went on to it
+      # instead of saying so.
       grasps:
-        - "edge_high  0.000 -0.035 -0.062  -1.5708 0.0 1.5708"
         - "scoop_right_near  0.1144 -0.0779 -0.0230  1.5881 -0.8177 1.5597"
         - "scoop_left_near   0.0444 -0.0780 -0.0222  1.5881 -0.8177 1.5597"
         - "scoop_right_far   0.0002 -0.0484 0.0528  -1.2196 1.5364 1.9233"

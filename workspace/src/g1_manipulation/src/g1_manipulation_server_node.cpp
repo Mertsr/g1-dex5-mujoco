@@ -1081,8 +1081,17 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // down on top and lifts straight up. All three poses must have an IK solution.
         if (isScoopGrasp(cname))
         {
+            // Logged, every one: a scoop silently skipped leaves the pick on whatever grasp comes
+            // next, and nothing in the result says why the scoop was not it.
             if (forwardness(*c.pose) < side_grasp_min_forward_)
             {
+                RCLCPP_INFO(
+                    get_logger(),
+                    "pick %s: %s skipped: its fingers point %.2f away from the robot (needs %.2f)",
+                    object_id.c_str(),
+                    c.name.c_str(),
+                    forwardness(*c.pose),
+                    side_grasp_min_forward_);
                 continue;
             }
             for (const std::string& a : arms_for(y))
@@ -1119,16 +1128,39 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                             "); is move_group running with its kinematics plugin?");
                     return;
                 }
-                if (*grasp_ik &&
-                    hasIk(ctx.arm_group, ctx.grasp_frame, *at.entry, nullptr, side_grasp_ik_timeout_s_)
-                        .value_or(false) &&
-                    hasIk(
-                        ctx.arm_group,
-                        ctx.grasp_frame,
-                        at.pregrasp,
-                        &at.pregrasp_joints,
-                        side_grasp_ik_timeout_s_)
-                        .value_or(false))
+                const bool entry_ik = *grasp_ik && hasIk(
+                                                       ctx.arm_group,
+                                                       ctx.grasp_frame,
+                                                       *at.entry,
+                                                       nullptr,
+                                                       side_grasp_ik_timeout_s_)
+                                                       .value_or(false);
+                const bool pre_ik = entry_ik && hasIk(
+                                                    ctx.arm_group,
+                                                    ctx.grasp_frame,
+                                                    at.pregrasp,
+                                                    &at.pregrasp_joints,
+                                                    side_grasp_ik_timeout_s_)
+                                                    .value_or(false);
+                RCLCPP_INFO(
+                    get_logger(),
+                    "pick %s: %s with the %s hand: grasp at pelvis (%.3f, %.3f, %.3f) %s, start "
+                    "%s, "
+                    "pregrasp %s",
+                    object_id.c_str(),
+                    c.name.c_str(),
+                    a.c_str(),
+                    at.grasp.position.x,
+                    at.grasp.position.y,
+                    at.grasp.position.z,
+                    *grasp_ik ? "reachable" : "NOT reachable",
+                    !*grasp_ik ? "-" :
+                    entry_ik   ? "reachable" :
+                                 "NOT reachable",
+                    !entry_ik ? "-" :
+                    pre_ik    ? "reachable" :
+                                "NOT reachable");
+                if (pre_ik)
                 {
                     attempts.push_back(at);
                     ++reachable_here;
@@ -1309,6 +1341,14 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     }
     RCLCPP_INFO(get_logger(), "pick %s: %zu reachable grasp poses out of %d IK checks",
                 object_id.c_str(), attempts.size(), ik_checked);
+    if (!unreachable.empty())
+    {
+        RCLCPP_INFO(
+            get_logger(),
+            "pick %s: not reachable: %s",
+            object_id.c_str(),
+            unreachable.c_str());
+    }
 
     if (attempts.empty())
     {
