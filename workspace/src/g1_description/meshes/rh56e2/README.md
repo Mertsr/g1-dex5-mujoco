@@ -2,11 +2,11 @@
 
 The hand descriptions (`urdf/rh56e2_left.urdf.xacro`, `urdf/rh56e2_right.urdf.xacro`) reference
 their meshes as `package://g1_description/meshes/rh56e2/{left,right}/<name>.STL`. The STL files
-come from the vendor's SolidWorks export. **Placeholder STLs are checked in for now** (tiny
-tetrahedra, one per name below) so the xacro resolves and the sim compiles without real
-geometry; replace them with the vendor's export before trusting any visual, collision or mass
-property here -- the inertials in rh56e2_left/right.urdf.xacro are already the real vendor
-values and do not depend on these files.
+come from the vendor's SolidWorks export (`RH56E2_L_2025_9_10`, `RH56E2_R_2025_9_11`) and are
+checked in. They used to be placeholder tetrahedra, kept out of the repo, with the real ones
+dropped in by hand -- which a fresh copy of the package silently replaced with the placeholders
+again (the hands vanished from RViz). The inertials in rh56e2_left/right.urdf.xacro are the
+vendor's own values and never depended on these files.
 
 Put the contents of each export's `meshes/` folder here:
 
