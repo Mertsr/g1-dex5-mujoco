@@ -295,6 +295,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // this far above it.
     scoop_slide_m_ = declare_parameter<double>("scoop_slide_m", 0.11);
     scoop_hover_m_ = declare_parameter<double>("scoop_hover_m", 0.08);
+    // ... and is aimed this much higher than published: the hand slides in pressed onto the
+    // table otherwise, the moment the arm or the part's height is off downward, and stalls there.
+    // Lifting held from -5 to +5 mm in MuJoCo, so this keeps the error window on the safe side.
+    scoop_raise_m_ = declare_parameter<double>("scoop_raise_m", 0.004);
 
     objects_sub_ = create_subscription<vision_msgs::msg::Detection3DArray>(
         "/objects",
@@ -1008,6 +1012,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
     // retry meaningful rather than a replay.
+    // Set once the hand is allowed to touch: from then on a failure leaves it on or in the
+    // surface, and the hand has to come back out before contact is checked again.
+    bool       contact_allowed = false;
     const auto fail = [&](const std::string& phase, const std::string& why) {
         if (hand_group)
         {
@@ -1016,6 +1023,35 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         if (arm_group)
         {
             arm_group->detachObject(object_id);
+            if (contact_allowed)
+            {
+                // Out the way it went in, still allowed to touch: a scoop slides back along its
+                // fingers and then rises, anything else rises along its approach. Without this
+                // the hand was left pressed into the table with contact checked again, every
+                // later plan started "in collision", and the arm would not move at all.
+                allowHandContact(arm, { "<octomap>", object_id }, true);
+                const geometry_msgs::msg::Pose now =
+                    arm_group->getCurrentPose(arm.grasp_frame).pose;
+                geometry_msgs::msg::Pose out = now;
+                if (entry_goal)
+                {
+                    out = slideBack(now, scoop_slide_m_);
+                    if (!moveLinear(*arm_group, out, arm.grasp_frame, "back out"))
+                    {
+                        out = now;
+                    }
+                }
+                geometry_msgs::msg::Pose up = out;
+                up.position.z += entry_goal ? scoop_hover_m_ : grasp_approach_m_;
+                if (!moveLinear(*arm_group, up, arm.grasp_frame, "back out"))
+                {
+                    RCLCPP_ERROR(
+                        get_logger(),
+                        "pick %s: could not take the hand back out after: %s",
+                        object_id.c_str(),
+                        why.c_str());
+                }
+            }
             allowHandContact(arm, { "<octomap>", object_id }, false);
         }
         result->success = false;
@@ -1110,6 +1146,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                             *c.pose,
                             handGoalFromGrasp(*c.pose, ctx.is_left),
                             geometry_msgs::msg::Pose() };
+                at.grasp.position.z += scoop_raise_m_;
                 at.entry    = slideBack(at.grasp, scoop_slide_m_);
                 at.pregrasp = *at.entry;
                 at.pregrasp.position.z += scoop_hover_m_;
@@ -1465,6 +1502,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // is also what gets PointCloudOctomapUpdater's ShapeMask to stop feeding it back into the
     // octomap -- world collision objects get no such filtering, attached bodies do.
     allowHandContact(arm, { "<octomap>" }, true);
+    contact_allowed = true;
     planning_scene_.removeCollisionObjects({ object_id });
 
     // Re-aimed at where the part is NOW, not where it was when the pick started: the tracker

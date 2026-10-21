@@ -262,6 +262,8 @@ private:
     /// the open hand back out the same distance.
     double scoop_slide_m_{ 0.11 };
     double scoop_hover_m_{ 0.08 };
+    /// How much higher than published a scoop is aimed (see the parameter).
+    double scoop_raise_m_{ 0.004 };
     /// How each held object is held: grasp_frame_T_object at the grasp, and by which arm.
     /// Remembered from the pick so a place can put the OBJECT where it is asked to go.
     std::mutex                              held_mutex_;
