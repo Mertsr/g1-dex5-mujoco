@@ -339,6 +339,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
         std::vector<double>{ 0.002, 0.352, -0.050 });
     scoop_clamp_pitch_rad_ =
         declare_parameter<double>("scoop_clamp_pitch_deg", 20.0) * M_PI / 180.0;
+    // Where the clamping hand is planned to before it comes down to its start: back along its
+    // fingers and up from it (the start itself is low over the table, inside its voxels).
+    scoop_clamp_pre_back_m_ = declare_parameter<double>("scoop_clamp_pre_back_m", 0.12);
+    scoop_clamp_pre_up_m_   = declare_parameter<double>("scoop_clamp_pre_up_m", 0.06);
     if (scoop_clamp_offset_.size() != 3 ||
         (scoop_second_hand_ != "clamp" && scoop_second_hand_ != "support" &&
          scoop_second_hand_ != "none"))
@@ -1844,14 +1848,35 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         if (clamp)
         {
             // In front of the edge's other half, at its height, fingers aimed at it; in along
-            // them, close, lift together.
+            // them, close, lift together. That start is low over the table, inside its voxels,
+            // so the plan goes to a point scoop_clamp_pre_back_m further back and
+            // scoop_clamp_pre_up_m higher, and the hand comes down from there exempt.
             const geometry_msgs::msg::Pose in_front = slideBack(on_part, scoop_slide_m_);
-            if (support_arm && support_hand && moveToNamed(*support_hand, "scoop_open") &&
-                moveTo(*support_arm, in_front, support.grasp_frame, "clamp: in front of the edge"))
+            geometry_msgs::msg::Pose       pre      = slideBack(in_front, scoop_clamp_pre_back_m_);
+            pre.position.z += scoop_clamp_pre_up_m_;
+            bool there =
+                support_arm && support_hand && moveToNamed(*support_hand, "scoop_open") &&
+                moveTo(*support_arm, pre, support.grasp_frame, "clamp: back from the edge");
+            if (!there && support_arm && support_hand)
+            {
+                allowHandContact(support, { "<octomap>", object_id }, true);
+                touching = true;
+                there    = moveTo(
+                    *support_arm,
+                    pre,
+                    support.grasp_frame,
+                    "clamp: back from the edge, exempt");
+            }
+            if (there)
             {
                 allowHandContact(support, { "<octomap>", object_id }, true);
                 touching = true;
                 held2    = moveLinear(
+                            *support_arm,
+                            in_front,
+                            support.grasp_frame,
+                            "clamp: in front of the edge") &&
+                        moveLinear(
                             *support_arm,
                             on_part,
                             support.grasp_frame,

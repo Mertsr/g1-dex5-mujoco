@@ -139,7 +139,23 @@ result:
     supporting hand down 1 cm and out, and sets the part down with the gripping hand alone.
   - `none`: one hand only.
 
-  If the second hand fails the part stays in the one hand and the result says so.
+  If the second hand fails the part stays in the one hand and the result says so. The clamping
+  hand is planned to a point `scoop_clamp_pre_back_m` (0.12) further back and
+  `scoop_clamp_pre_up_m` (0.06) higher than its start -- the start is low over the table, inside
+  its voxels -- and comes down to it on a straight line. Measured that way in MuJoCo (the
+  `conveyor_flat` panels, windows closed, lift 0.20 as configured): sag 5.1-5.4 degrees, roll 3,
+  a 5 N push up at the far end 30 mm, back to 7 mm; the same with the robot turned 5 degrees.
+
+  **Where to stand.** `scripts/panel_stance.py` (`ros2 run g1_manipulation panel_stance.py
+  --object panel_1`) tucks both arms beside the hips (shoulder pitch 0.3, roll 0.2 outward,
+  elbow 1.2: out of the table's way and of the lifting hand's), then walks the base, closed loop
+  on the panel's pose from `/objects`, until the panel's origin is 0.395 m ahead of
+  `base_footprint` and centred on it, its long axis across the robot (1.5 cm, 3 degrees; the
+  clamp held 2-3 cm and 5 degrees off). That is the stance the scoop and the clamp were measured
+  from: the pelvis 20 cm back from the table's edge, square to the panel and centred on its
+  length. It drives `/cmd_vel_approach`, the gait shaper's priority input, so it needs
+  `nav:=true`; `--check` only reports the offset, `--arms-only` / `--no-arms` do half. Then pick
+  with `arm: right`.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the

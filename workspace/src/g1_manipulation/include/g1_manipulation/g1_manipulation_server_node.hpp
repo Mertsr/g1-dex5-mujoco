@@ -297,6 +297,8 @@ private:
     std::string         scoop_second_hand_{ "clamp" };
     std::vector<double> scoop_clamp_offset_{ 0.002, 0.352, -0.050 };
     double              scoop_clamp_pitch_rad_{ 0.349 };
+    double              scoop_clamp_pre_back_m_{ 0.12 };
+    double              scoop_clamp_pre_up_m_{ 0.06 };
     std::vector<double> scoop_support_offset_{ -0.02, 0.314, 0.017 };
     double              scoop_support_drop_m_{ 0.08 };
     double              scoop_support_back_m_{ 0.12 };
