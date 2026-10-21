@@ -61,7 +61,11 @@ g1_object_tracker:
         - "nest_4  -0.2262 0.0 0.0755 -1.5394 0.0022 -1.5712"
 
     panel:
-      model: package://g1_perception/models/bsh_panel.stl
+      # The real panel's windows are closed (a glass display, a glass label strip, flush with the
+      # plate): bsh_panel.stl with those two openings filled by 3 mm slabs flush with the plate
+      # around them -- the same covers g1_conveyor_flat_scene.xml puts on its panels
+      # (g1_bringup/tools/make_conveyor_flat_scene.py). The STL's frame is unchanged.
+      model: package://g1_perception/models/bsh_panel_closed.stl
       model_scale: 1.0
       # Up to this many panels at once, reported as panel_1 .. panel_4 (one model, loaded once).
       # Each takes whichever prior below verifies and no other instance holds. Pick with
