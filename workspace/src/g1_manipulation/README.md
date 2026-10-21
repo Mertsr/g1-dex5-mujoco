@@ -110,6 +110,22 @@ result:
   underside, thumb down on top) and lifts straight up. IK is checked at all three poses. A place
   of a scooped part lowers it from above, opens, slides the hand back out the same distance along
   the surface (still allowed to touch the part), and only then rises.
+
+  A scooped part hangs from one edge and sags along its length (the 0.6 m panel: 9-20 degrees;
+  the fingers' 1 Nm cannot hold it level). With `scoop_two_hand` (on) the OTHER hand then holds it
+  from underneath: it opens, plans to a point `scoop_support_back_m` (0.12) in front of and
+  `scoop_support_drop_m` (0.08) below its support pose, slides in under the part and rises into
+  it, palm up, fingers along the scoop's heading; the two arms then lift `scoop_support_lift_m`
+  (0.05) more together, as one `both_arms` trajectory. The support pose is `scoop_support_offset`
+  (-0.02, 0.314, 0.017 m) from the gripping hand's lifted grasp frame: along its fingers' level
+  heading, sideways toward the part's middle, and up -- under the panel's other half, 1.7 cm
+  above its levelled underside so it presses that side up level. In MuJoCo (sim arm gains,
+  gravity compensation) that takes the sag from 9 to 2-3 degrees and the swing under 0.2, for
+  stances 15 cm apart and the support pose off by 1-2 cm. If the support fails the part stays in
+  the one hand and the result says so. A place of a part held so moves both hands together
+  (straight in joint space: walk to the target first, keep the carry short) down to
+  `support_release_height_m` (0.025) above the target, takes the supporting hand down 1 cm and
+  out from under, and sets the part down with the gripping hand alone.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the

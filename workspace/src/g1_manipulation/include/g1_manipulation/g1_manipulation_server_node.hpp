@@ -220,6 +220,13 @@ private:
     void usePinchFrame(ArmContext& arm);
     bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
     bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
+    /// Both arms at once, each to its own pose for its grasp frame: IK for each (seeded where it
+    /// is), then one trajectory for both_arms, straight in joint space and timed together. For
+    /// the short moves of a part held in two hands (a lift, a lower), which neither arm may make
+    /// alone. Not collision-checked beyond IK: keep the moves short.
+    bool moveBothTo(
+        const ArmContext& a, const geometry_msgs::msg::Pose& pose_a, const ArmContext& b,
+        const geometry_msgs::msg::Pose& pose_b, const std::string& what);
 
     rclcpp_action::Server<Pick>::SharedPtr          pick_server_;
     rclcpp_action::Server<Place>::SharedPtr         place_server_;
@@ -278,6 +285,17 @@ private:
     std::map<std::string, bool> held_yaw_free_;
     /// Picked with a scoop: released by sliding the hand out from under it, not by lifting.
     std::map<std::string, bool> held_scoop_;
+    /// Held in two hands: the supporting arm, and its grasp frame's goal relative to the
+    /// gripping arm's (both as commanded), so a place moves the two together.
+    std::map<std::string, std::string>    held_support_arm_;
+    std::map<std::string, tf2::Transform> held_support_T_;
+    /// A scooped part is then held from underneath by the other hand too (see the parameters).
+    bool                scoop_two_hand_{ true };
+    std::vector<double> scoop_support_offset_{ -0.02, 0.314, 0.017 };
+    double              scoop_support_drop_m_{ 0.08 };
+    double              scoop_support_back_m_{ 0.12 };
+    double              scoop_support_lift_m_{ 0.05 };
+    double              support_release_height_m_{ 0.025 };
 };
 
 }  // namespace g1_manipulation
