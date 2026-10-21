@@ -435,10 +435,13 @@ def _launch_setup(context, *args, **kwargs):
         ],
     )
 
+    # The simulated hands weigh 0.170 kg of the real 0.777 (patch 003), so the arms' gravity
+    # compensation counts them at that fraction; at the real weight it would lift the arm.
     control_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("g1_bringup"), "launch", "control.launch.py")
-        )
+        ),
+        launch_arguments={"gravity_hand_mass_scale": "0.2188"}.items(),
     )
 
     # LocoClient bridge — talks to motion_service_sim's /api/sport/* responder.

@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "g1_hardware_interface/arm_gravity.hpp"
 #include "g1_hardware_interface/arm_ramp_engine.hpp"
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -64,7 +65,8 @@ std::array<double, kNumWaistJoints> waistHoldFrom(const unitree_hg::msg::LowStat
 
 /**
  * @brief Fills the 14 arm slots and the 3 waist slots on `cmd`, plus the weight slot
- * (motor_cmd[kWeightMotorIndex].q); dq/tau are set to 0 on all of them.
+ * (motor_cmd[kWeightMotorIndex].q); dq is 0 on all of them, tau is `tau` on the arms (0 by
+ * default) and 0 on the waist.
  *
  * Arms take `position`; the waist takes `waist_hold`, which is where it was measured when
  * authority was acquired. LEGS AND HANDS are left exactly as `cmd` already had it -- callers
@@ -84,12 +86,14 @@ std::array<double, kNumWaistJoints> waistHoldFrom(const unitree_hg::msg::LowStat
  * @param waist_hold   Latched waist position, one per kWaistMotorIndex entry.
  * @param waist_kp     Position gain for all three waist motors.
  * @param waist_kd     Velocity gain for all three waist motors.
+ * @param tau          Per-joint feed-forward torque for each arm joint (gravity compensation).
  */
 void assembleLowCmd(
     unitree_hg::msg::LowCmd& cmd, const std::array<int, kNumArmJoints>& motor_index,
     const std::array<double, kNumArmJoints>& position, const std::array<double, kNumArmJoints>& kp,
     const std::array<double, kNumArmJoints>& kd, float weight,
-    const std::array<double, kNumWaistJoints>& waist_hold, double waist_kp, double waist_kd);
+    const std::array<double, kNumWaistJoints>& waist_hold, double waist_kp, double waist_kd,
+    const std::array<double, kNumArmJoints>& tau = {});
 
 /**
  * @brief ros2_control System bridging the G1's 14 arm joints onto Unitree's weight-blended
@@ -167,6 +171,19 @@ private:
     std::array<double, kNumArmJoints> command_position_{};
 
     ArmRampEngine ramp_engine_{ RampConfig{} };
+
+    /// Gravity compensation: each arm motor's feed-forward torque is gravity_compensation_ times
+    /// the torque that holds the arm (and the hand on it) still, from the URDF -- the arm PD is
+    /// soft, and without it a reaching arm sags by centimetres. 0 sends none. The hands' masses
+    /// are scaled by gravity_hand_mass_scale_ (1 on the robot; the simulator's hands are light).
+    double                            gravity_compensation_{ 0.0 };
+    double                            gravity_hand_mass_scale_{ 1.0 };
+    ArmGravity                        gravity_;
+    std::array<double, kNumArmJoints> gravity_tau_{};  ///< full torque, before the blend weight
+    /// Recomputes gravity_tau_ from a LowState; no-op with compensation off.
+    void updateGravityTau(const unitree_hg::msg::LowState& state);
+    /// gravity_tau_ times the blend weight: the feed-forward fades in and out with authority.
+    std::array<double, kNumArmJoints> weightedGravityTau(double weight) const;
 
     /**
      * @brief LowState carries no timestamp field of its own, so freshness

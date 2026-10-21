@@ -9,8 +9,10 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(unitree_hg REQUIRED)
+find_package(urdf REQUIRED)
 
 add_library(g1_arm_sdk_system SHARED
+  src/arm_gravity.cpp
   src/arm_ramp_engine.cpp
   src/motor_crc_hg.cpp
   src/g1_arm_sdk_system.cpp
@@ -30,6 +32,7 @@ ament_target_dependencies(g1_arm_sdk_system PUBLIC
   rclcpp_lifecycle
   realtime_tools
   unitree_hg
+  urdf
 )
 
 # Makes the plugin discoverable via pluginlib's ament-index lookup -- the
@@ -92,6 +95,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_assemble_low_cmd g1_arm_sdk_system)
   ament_target_dependencies(test_assemble_low_cmd unitree_hg)
 
+  # The gravity model against a pendulum whose torque is known by hand.
+  ament_add_gmock(test_arm_gravity test/test_arm_gravity.cpp)
+  target_link_libraries(test_arm_gravity g1_arm_sdk_system)
+
   ament_add_gmock(test_lowstate_joint_states test/test_lowstate_joint_states.cpp)
   target_link_libraries(test_lowstate_joint_states lowstate_joint_states)
 
@@ -144,6 +151,7 @@ ament_export_dependencies(
   realtime_tools
   sensor_msgs
   unitree_hg
+  urdf
 )
 
 ament_package()

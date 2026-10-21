@@ -23,6 +23,16 @@ system:
   waist_kp: 160.0
   waist_kd: 4.0
 
+  # Gravity compensation: each arm motor also gets, as feed-forward torque, this fraction of the
+  # torque that holds its arm still -- computed from the URDF (the arm, the hand, the fingers) at
+  # the measured joint positions and the pelvis IMU's attitude. The PD above is soft: without it
+  # an arm reaching out sags 1-1.5 cm under its own weight, and a hand pressed onto a table sags
+  # further and stalls (measured in MuJoCo: a scoop under the BSH panel's edge stopped 7 cm short
+  # and slid off the table's front; with it, the same scoop lifts the panel). 0 turns it off.
+  # The hands' URDF mass is 0.777 kg each; the simulator's are 0.170 (patch 003), which the
+  # simulator corrects with the xacro arg gravity_hand_mass_scale (control.launch.py).
+  gravity_compensation: 1.0
+
 # Per-joint motor index (position in the LowCmd/LowState motor array) and
 # position-gain pair. Index map is G1Arm7JointIndex from unitree_ros2's
 # example/src/include/g1/g1.hpp: legs 0-11, waist 12-14, left arm 15-21,

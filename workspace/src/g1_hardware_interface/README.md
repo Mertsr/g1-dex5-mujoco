@@ -57,6 +57,8 @@ the legs. The weight in motor slot 29 tells it how much of the arm command to ho
 | `max_joint_velocity_rad_s` | Slew clamp per joint, independent of the weight ramp. |
 | `lowstate_timeout_ms` | `/lowstate` age beyond this counts as stale. Blocks activation, and while active triggers the emergency ramp. |
 | `waist_kp`, `waist_kd` | Gains the three waist motors are held at while the blend is up. Unitree's 4x-the-arms ratio applied to ours; unmeasured, see below. |
+| `gravity_compensation` | Fraction of the gravity-holding torque sent as each arm motor's feed-forward `tau` (0 off, default 1 in `arm_sdk_params.yaml`). Computed by `ArmGravity` from the URDF (everything below each joint: arm, hand, fingers) at the measured joint positions and the pelvis IMU's attitude, scaled by the blend weight. Without it the soft PD (kp 25-40) lets a reaching arm sag 1-1.5 cm, more against a table. If the model cannot be built the component refuses to init. |
+| `gravity_hand_mass_scale` | The hands' mass as that torque counts it, a fraction of the URDF's 0.777 kg: 1 on the robot, 0.2188 in the simulator (its hands are 0.170 kg, patch 003). The xacro arg of the same name; `sim.launch.py` passes it through `control.launch.py`. |
 
 Values live in `g1_description/config/arm_sdk_params.yaml`.
 

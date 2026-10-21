@@ -9,10 +9,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import EmitEvent, ExecuteProcess, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
-from launch.substitutions import Command, FindExecutable
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -35,7 +35,15 @@ def generate_launch_description():
     xacro_path = os.path.join(g1_description_share, "urdf", "g1_arm_sdk.urdf.xacro")
     controllers_yaml = os.path.join(g1_bringup_share, "config", "controllers.yaml")
 
-    robot_description_content = Command([FindExecutable(name="xacro"), " ", xacro_path])
+    robot_description_content = Command(
+        [
+            FindExecutable(name="xacro"),
+            " ",
+            xacro_path,
+            " gravity_hand_mass_scale:=",
+            LaunchConfiguration("gravity_hand_mass_scale"),
+        ]
+    )
     robot_description = {
         "robot_description": ParameterValue(robot_description_content, value_type=str)
     }
@@ -112,6 +120,13 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "gravity_hand_mass_scale",
+                default_value="1.0",
+                description="The hands' mass as the arm's gravity compensation counts it, as a "
+                "fraction of the URDF's 0.777 kg: 1 on the robot; sim.launch.py passes the "
+                "simulator's 0.170 / 0.777.",
+            ),
             robot_state_publisher_node,
             control_node,
             joint_state_broadcaster_spawner,

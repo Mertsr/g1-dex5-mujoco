@@ -96,14 +96,15 @@ void assembleLowCmd(
     unitree_hg::msg::LowCmd& cmd, const std::array<int, kNumArmJoints>& motor_index,
     const std::array<double, kNumArmJoints>& position, const std::array<double, kNumArmJoints>& kp,
     const std::array<double, kNumArmJoints>& kd, float weight,
-    const std::array<double, kNumWaistJoints>& waist_hold, double waist_kp, double waist_kd)
+    const std::array<double, kNumWaistJoints>& waist_hold, double waist_kp, double waist_kd,
+    const std::array<double, kNumArmJoints>& tau)
 {
     for (std::size_t i = 0; i < kNumArmJoints; ++i)
     {
         auto& motor = cmd.motor_cmd[static_cast<std::size_t>(motor_index[i])];
         motor.q     = static_cast<float>(position[i]);
         motor.dq    = 0.0F;
-        motor.tau   = 0.0F;
+        motor.tau   = static_cast<float>(tau[i]);
         motor.kp    = static_cast<float>(kp[i]);
         motor.kd    = static_cast<float>(kd[i]);
     }
@@ -213,6 +214,62 @@ G1ArmSdkSystem::on_init(const hardware_interface::HardwareInfo& info)
         return hardware_interface::CallbackReturn::ERROR;
     }
     lowstate_timeout_s_ = lowstate_timeout_ms / 1000.0;
+
+    // Optional, so a description without them keeps the old behaviour (no feed-forward).
+    gravity_compensation_    = 0.0;
+    gravity_hand_mass_scale_ = 1.0;
+    if (hw_params.count("gravity_compensation") != 0 &&
+        !parseDouble(hw_params, "gravity_compensation", gravity_compensation_))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger(kLoggerName), "gravity_compensation does not parse");
+        return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (hw_params.count("gravity_hand_mass_scale") != 0 &&
+        !parseDouble(hw_params, "gravity_hand_mass_scale", gravity_hand_mass_scale_))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger(kLoggerName), "gravity_hand_mass_scale does not parse");
+        return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (gravity_compensation_ < 0.0 || gravity_compensation_ > 1.5 || gravity_hand_mass_scale_ < 0.0)
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger(kLoggerName),
+            "gravity_compensation must be in [0, 1.5] and gravity_hand_mass_scale >= 0");
+        return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (gravity_compensation_ > 0.0)
+    {
+        // Every joint whose position feeds the arm's gravity: the waist below it, both arms.
+        std::unordered_map<std::string, int> motor_of{ { "waist_yaw_joint", kWaistMotorIndex[0] },
+                                                       { "waist_roll_joint", kWaistMotorIndex[1] },
+                                                       { "waist_pitch_joint",
+                                                         kWaistMotorIndex[2] } };
+        for (std::size_t i = 0; i < kNumArmJoints; ++i)
+        {
+            motor_of[joint_names_[i]] = motor_index_[i];
+        }
+        const std::string why = gravity_.load(
+            info_.original_xml,
+            "pelvis",
+            motor_of,
+            { "left_hand_palm_link", "right_hand_palm_link" },
+            gravity_hand_mass_scale_);
+        if (!why.empty())
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger(kLoggerName),
+                "gravity compensation is on but its model could not be built (%s); refusing to "
+                "start an arm that would sag",
+                why.c_str());
+            return hardware_interface::CallbackReturn::ERROR;
+        }
+        RCLCPP_INFO(
+            rclcpp::get_logger(kLoggerName),
+            "gravity compensation x%.2f, hands' mass x%.3f (%.1f kg below the pelvis)",
+            gravity_compensation_,
+            gravity_hand_mass_scale_,
+            gravity_.totalMass());
+    }
 
     if (command_publish_rate_hz_ <= 0.0 || blend_ramp_up_s_ <= 0.0 || blend_ramp_down_s_ <= 0.0 ||
         emergency_ramp_down_s_ <= 0.0 || max_joint_velocity_rad_s_ <= 0.0 ||
@@ -468,6 +525,7 @@ G1ArmSdkSystem::write(const rclcpp::Time& /*time*/, const rclcpp::Duration& peri
         {
             time_since_last_publish_s_ -= publish_period_s;
         }
+        updateGravityTau(sample->state);
         if (arm_sdk_rt_pub_ && arm_sdk_rt_pub_->trylock())
         {
             assembleLowCmd(
@@ -479,7 +537,8 @@ G1ArmSdkSystem::write(const rclcpp::Time& /*time*/, const rclcpp::Duration& peri
                 static_cast<float>(weight),
                 waist_hold_,
                 waist_kp_,
-                waist_kd_);
+                waist_kd_,
+                weightedGravityTau(weight));
             vendored::computeLowCmdCrc(arm_sdk_rt_pub_->msg_);
             arm_sdk_rt_pub_->unlockAndPublish();
             terminal_publish_succeeded = true;
@@ -496,6 +555,39 @@ G1ArmSdkSystem::write(const rclcpp::Time& /*time*/, const rclcpp::Duration& peri
     }
 
     return hardware_interface::return_type::OK;
+}
+
+void G1ArmSdkSystem::updateGravityTau(const unitree_hg::msg::LowState& state)
+{
+    if (gravity_compensation_ <= 0.0 || !gravity_.loaded())
+    {
+        return;
+    }
+    std::array<double, ArmGravity::kNumMotors> motor_q{};
+    for (std::size_t i = 0; i < ArmGravity::kNumMotors && i < state.motor_state.size(); ++i)
+    {
+        motor_q[i] = state.motor_state[i].q;
+    }
+    const std::array<double, 4>                quat{ state.imu_state.quaternion[0],
+                                      state.imu_state.quaternion[1],
+                                      state.imu_state.quaternion[2],
+                                      state.imu_state.quaternion[3] };
+    std::array<double, ArmGravity::kNumMotors> tau{};
+    gravity_.compute(motor_q, quat, tau);
+    for (std::size_t i = 0; i < kNumArmJoints; ++i)
+    {
+        gravity_tau_[i] = gravity_compensation_ * tau[static_cast<std::size_t>(motor_index_[i])];
+    }
+}
+
+std::array<double, kNumArmJoints> G1ArmSdkSystem::weightedGravityTau(double weight) const
+{
+    std::array<double, kNumArmJoints> out{};
+    for (std::size_t i = 0; i < kNumArmJoints; ++i)
+    {
+        out[i] = weight * gravity_tau_[i];
+    }
+    return out;
 }
 
 std::string G1ArmSdkSystem::makeInternalNodeName()
@@ -609,6 +701,8 @@ void G1ArmSdkSystem::rampDownSynchronously(BlendMode target_mode)
         {
             /* Blocking lock is fine: not the RT path, and write() is quiescent. */
             arm_sdk_rt_pub_->lock();
+            // The last torque write() computed, fading with the weight: no LowState is read on
+            // this path.
             assembleLowCmd(
                 arm_sdk_rt_pub_->msg_,
                 motor_index_,
@@ -618,7 +712,8 @@ void G1ArmSdkSystem::rampDownSynchronously(BlendMode target_mode)
                 static_cast<float>(weight),
                 waist_hold_,
                 waist_kp_,
-                waist_kd_);
+                waist_kd_,
+                weightedGravityTau(weight));
             vendored::computeLowCmdCrc(arm_sdk_rt_pub_->msg_);
             arm_sdk_rt_pub_->unlockAndPublish();
         }

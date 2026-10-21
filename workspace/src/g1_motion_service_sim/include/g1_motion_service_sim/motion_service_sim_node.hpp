@@ -173,6 +173,7 @@ private:
     std::array<double, kNumArmMotors>     arm_cmd_q_{};
     std::array<double, kNumArmMotors>     arm_cmd_kp_{};
     std::array<double, kNumArmMotors>     arm_cmd_kd_{};
+    std::array<double, kNumArmMotors>     arm_cmd_tau_{};
     double                                arm_cmd_weight_{ 0.0 };
     bool                                  arm_sdk_received_{ false };
     std::chrono::steady_clock::time_point arm_sdk_arrival_{};

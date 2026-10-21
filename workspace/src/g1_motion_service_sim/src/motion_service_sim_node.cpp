@@ -7,6 +7,7 @@
 
 #include "g1_motion_service_sim/motion_service_sim_node.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <nlohmann/json.hpp>
@@ -745,6 +746,7 @@ void MotionServiceSim::armSdkCallback(const unitree_hg::msg::LowCmd::ConstShared
         arm_cmd_q_[i]     = motor.q;
         arm_cmd_kp_[i]    = motor.kp;
         arm_cmd_kd_[i]    = motor.kd;
+        arm_cmd_tau_[i]   = motor.tau;
     }
     arm_cmd_weight_   = msg->motor_cmd[kWeightMotorIndex].q;
     arm_sdk_received_ = true;
@@ -815,6 +817,16 @@ void MotionServiceSim::publishTick()
         effective_weight_,
         arm_hold_kp_,
         arm_hold_kd_);
+    // The arms' feed-forward torque (G1ArmSdkSystem's gravity compensation), already scaled by
+    // the weight /arm_sdk sent; rescaled to the weight actually in force here, so it fades with
+    // this blend (a stale /arm_sdk decays it to nothing) instead of outliving it.
+    const double tau_scale =
+        arm_cmd_weight_ > 1e-6 ? std::clamp(effective_weight_ / arm_cmd_weight_, 0.0, 1.0) : 0.0;
+    for (int i = 0; i < kNumArmMotors; ++i)
+    {
+        cmd.motor_cmd[static_cast<std::size_t>(kFirstArmMotor + i)].tau =
+            static_cast<float>(tau_scale * arm_cmd_tau_[static_cast<std::size_t>(i)]);
+    }
 
     // mode/mode_pr/mode_machine left unset — unitree_mujoco never reads them
     // (computes torque from q/kp/kd/dq directly). Real hardware may differ.

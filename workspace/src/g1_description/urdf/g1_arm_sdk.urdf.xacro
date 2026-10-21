@@ -90,6 +90,12 @@
     <origin xyz="0.011 0.02329 -0.04412" rpy="0 0 0"/>
   </joint>
 
+  <!-- The hands' mass as the arm's gravity compensation should count it, a fraction of the
+       URDF's: 1 on the robot. The simulator's hands are scaled to 0.170 of 0.777 kg (patch 003,
+       for the walking policy), and compensating the real weight there would lift the arm; its
+       launch passes 0.2188. -->
+  <xacro:arg name="gravity_hand_mass_scale" default="1.0"/>
+
   <!-- Load tunable YAML for ROS 2 control parameters. -->
   <xacro:property name="arm_sdk_params" value="${xacro.load_yaml('../config/arm_sdk_params.yaml')}"/>
 
@@ -119,6 +125,8 @@
       <param name="lowstate_timeout_ms">${arm_sdk_params.system.lowstate_timeout_ms}</param>
       <param name="waist_kp">${arm_sdk_params.system.waist_kp}</param>
       <param name="waist_kd">${arm_sdk_params.system.waist_kd}</param>
+      <param name="gravity_compensation">${arm_sdk_params.system.gravity_compensation}</param>
+      <param name="gravity_hand_mass_scale">$(arg gravity_hand_mass_scale)</param>
     </hardware>
 
     <xacro:g1_arm_joint name="left_shoulder_pitch_joint"/>
