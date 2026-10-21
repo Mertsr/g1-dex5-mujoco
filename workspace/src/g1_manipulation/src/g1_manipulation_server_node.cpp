@@ -796,7 +796,7 @@ void G1ManipulationServer::usePinchFrame(ArmContext& arm)
 
 std::optional<bool> G1ManipulationServer::hasIk(
     const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
-    std::map<std::string, double>* joints, double timeout_s)
+    std::map<std::string, double>* joints, double timeout_s, bool avoid_collisions)
 {
     ik_broken_code_ = 0;
     if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
@@ -807,7 +807,8 @@ std::optional<bool> G1ManipulationServer::hasIk(
     request->ik_request.group_name        = group;
     request->ik_request.ik_link_name      = link;
     request->ik_request.robot_state.is_diff = true;  // seeded from the current state
-    request->ik_request.avoid_collisions  = false;  // reach only; the planner checks collisions
+    // Reach only by default; the planner checks collisions.
+    request->ik_request.avoid_collisions             = avoid_collisions;
     request->ik_request.pose_stamped.header.frame_id = planning_frame_;
     request->ik_request.pose_stamped.pose = pose;
     request->ik_request.timeout                      = rclcpp::Duration::from_seconds(timeout_s);
@@ -1135,12 +1136,16 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                                                        nullptr,
                                                        side_grasp_ik_timeout_s_)
                                                        .value_or(false);
+                // The pregrasp's joints are the goal planned to, so they must not collide: with
+                // the hand palm up near the body's middle, KDL's first answer often swings the
+                // shoulder into the torso, and the planner then rejects the goal outright.
                 const bool pre_ik = entry_ik && hasIk(
                                                     ctx.arm_group,
                                                     ctx.grasp_frame,
                                                     at.pregrasp,
                                                     &at.pregrasp_joints,
-                                                    side_grasp_ik_timeout_s_)
+                                                    side_grasp_ik_timeout_s_,
+                                                    /*avoid_collisions=*/true)
                                                     .value_or(false);
                 RCLCPP_INFO(
                     get_logger(),

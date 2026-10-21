@@ -204,11 +204,14 @@ private:
     rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr apply_scene_;
     rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr      compute_ik_;
     int ik_broken_code_{ 0 };  ///< last /compute_ik error that was not "no solution"
-    /// Whether `group` can put `link` at `pose` (planning frame), collisions ignored, by
-    /// move_group's /compute_ik. Nothing if the service did not answer.
+    /// Whether `group` can put `link` at `pose` (planning frame), by move_group's /compute_ik:
+    /// collisions ignored, or with `avoid_collisions` only a solution free of them (the arm off
+    /// the torso, nothing in the scene) -- for a joint goal that is planned to directly, which
+    /// the planner rejects outright when it collides. Nothing if the service did not answer.
     std::optional<bool> hasIk(
         const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
-        std::map<std::string, double>* joints = nullptr, double timeout_s = 0.05);
+        std::map<std::string, double>* joints = nullptr, double timeout_s = 0.05,
+        bool avoid_collisions = false);
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
     double octomap_refill_s_{ 1.0 };
     /// plan(), and on failure clear the octomap, let it refill and plan once more: a start
