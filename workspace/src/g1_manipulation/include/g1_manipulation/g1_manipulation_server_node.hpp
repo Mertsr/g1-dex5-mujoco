@@ -75,6 +75,29 @@ geometry_msgs::msg::Pose handGoalFromGrasp(const geometry_msgs::msg::Pose& grasp
 /// reverse -- where the straight-line approach starts and the retreat ends.
 geometry_msgs::msg::Pose backOff(const geometry_msgs::msg::Pose& pose, double distance);
 
+/// `pose` moved `distance` straight back along its fingers' heading, the fingers' direction with
+/// its component along `up` removed: where a scoop starts (in front of the edge, at the same
+/// height) and where it slides back out to. `up` is the world's vertical in the pose's frame, so
+/// the slide runs parallel to a level table even when that frame (the pelvis) is tilted.
+geometry_msgs::msg::Pose slideBack(
+    const geometry_msgs::msg::Pose& pose, double distance,
+    const tf2::Vector3& up = tf2::Vector3(0.0, 0.0, 1.0));
+
+/// `pose` moved `distance` along `up`.
+geometry_msgs::msg::Pose
+raised(const geometry_msgs::msg::Pose& pose, const tf2::Vector3& up, double distance);
+
+/// A scoop hand pose rebuilt level: the fingers keep their heading about `up` and are pitched
+/// exactly `pitch` (rad) below the horizontal, the palm faces up (or down, for a left hand's goal,
+/// which handGoalFromGrasp turns over about the fingers -- whichever `pose` has). What a scoop
+/// needs is fixed by the table, not by how the part's pose was estimated: a panel seen a few
+/// degrees tilted would otherwise turn the hand flat onto the table.
+geometry_msgs::msg::Pose
+levelScoop(const geometry_msgs::msg::Pose& pose, const tf2::Vector3& up, double pitch);
+
+/// How far (rad) the fingers of a grasp frame at `orientation` point below the horizontal.
+double fingerPitch(const geometry_msgs::msg::Quaternion& orientation, const tf2::Vector3& up);
+
 /// A published grasp turned about its closing axis (the grasp frame's y) by `tilt`, and turned
 /// over (half a turn about the fingers) if `flipped`: the same pinch at the same point.
 struct GraspVariant
@@ -297,13 +320,45 @@ private:
     std::string         scoop_second_hand_{ "clamp" };
     std::vector<double> scoop_clamp_offset_{ 0.002, 0.352, -0.050 };
     double              scoop_clamp_pitch_rad_{ 0.349 };
-    double              scoop_clamp_pre_back_m_{ 0.12 };
-    double              scoop_clamp_pre_up_m_{ 0.06 };
     std::vector<double> scoop_support_offset_{ -0.02, 0.314, 0.017 };
     double              scoop_support_drop_m_{ 0.08 };
     double              scoop_support_back_m_{ 0.12 };
     double              scoop_support_lift_m_{ 0.05 };
     double              support_release_height_m_{ 0.025 };
+
+    /// Scoops are built level with the world, not the pelvis (which leans when the robot
+    /// reaches): `up_` is the world's vertical in the planning frame, from TF's gravity_frame_
+    /// (odom), refreshed at the start of every pick and place.
+    std::string  gravity_frame_{ "odom" };
+    tf2::Vector3 up_{ 0.0, 0.0, 1.0 };
+    void         refreshUp();
+    /// The scoop's fingers below the horizontal, and how far the hand may really be from that
+    /// once down at the table before the slide is called off (flatter, its base meets the
+    /// table's edge).
+    double scoop_pitch_rad_{ 0.436 };
+    double scoop_pitch_tolerance_rad_{ 0.14 };
+    /// Where the robot stands is not exact: a scoop is also tried with the gripping hand turned
+    /// about the vertical from square to the edge (and the clamping hand, scoop_clamp_turns_rad_).
+    std::vector<double> scoop_turns_rad_{ 0.0, 0.175, 0.349 };
+    /// The clamping hand's approach: tried from these (back, up) points in turn.
+    std::vector<double> scoop_clamp_pre_m_{ 0.12, 0.06, 0.0, 0.08 };
+    /// The best stance for the two-hand scoop, as where the right hand's scoop point should be
+    /// in the pelvis frame (x ahead, y left): told to the user when nothing is reachable.
+    std::vector<double> scoop_stance_aim_{ 0.42, -0.14 };
+    double              scoop_variant_ik_timeout_s_{ 0.1 };
+
+    /// The clamping hand's poses for a scoop whose gripping hand is lifted to `lifted`, having
+    /// come in turned by `gripping_turn` (rad, about the vertical) from square to the edge; the
+    /// clamping hand comes in turned by `clamping_turn`, from the (back, up) approach point.
+    struct ClampPoses
+    {
+        geometry_msgs::msg::Pose pre, in_front, at, lifted;
+    };
+    ClampPoses clampPoses(
+        const geometry_msgs::msg::Pose& lifted, double gripping_turn, bool clamping_is_left,
+        double pre_back, double pre_up, double clamping_turn) const;
+    /// The clamping hand is also tried turned about the vertical by these (rad).
+    std::vector<double> scoop_clamp_turns_rad_{ 0.0, 0.175, 0.349 };
 };
 
 }  // namespace g1_manipulation

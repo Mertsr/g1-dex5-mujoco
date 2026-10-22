@@ -203,3 +203,71 @@ TEST(ObjectGrasp, VariantsTurnAboutTheClosingAxis)
     EXPECT_EQ(variants.size(), 22u);
     EXPECT_EQ(flipped, 11);
 }
+
+namespace
+{
+/// The scoop as published: fingers along +x pitched `pitch` down, palm (y) up.
+geometry_msgs::msg::Pose scoopAt(double pitch, double roll = 0.0)
+{
+    geometry_msgs::msg::Pose pose = objectAt(0.4, -0.2, 0.0);
+    tf2::Quaternion          q;
+    // Rx(-90 deg) takes y to z: palm up, fingers along +x; then pitched about the world's y.
+    tf2::Quaternion pitch_q, roll_q, base;
+    base.setRPY(M_PI_2, 0.0, 0.0);
+    pitch_q.setRPY(0.0, pitch, 0.0);
+    roll_q.setRPY(roll, 0.0, 0.0);
+    q                = pitch_q * roll_q * base;
+    pose.orientation = tf2::toMsg(q.normalized());
+    return pose;
+}
+tf2::Matrix3x3 rotOf(const geometry_msgs::msg::Pose& pose)
+{
+    tf2::Quaternion q;
+    tf2::fromMsg(pose.orientation, q);
+    return tf2::Matrix3x3(q);
+}
+}  // namespace
+
+// A panel estimated tilted tips the published scoop with it; levelScoop puts it back to the
+// configured pitch below the world's horizontal, palm up, the fingers' heading and point kept.
+TEST(Scoop, LevelScoopRestoresPitchAndRoll)
+{
+    const double       pitch  = 25.0 * M_PI / 180.0;
+    const auto         tilted = scoopAt(5.0 * M_PI / 180.0, 0.3);  // flatter and rolled
+    const tf2::Vector3 up(0.0, 0.0, 1.0);
+    const auto         level = g1_manipulation::levelScoop(tilted, up, pitch);
+    EXPECT_NEAR(g1_manipulation::fingerPitch(level.orientation, up), pitch, 1e-9);
+    EXPECT_DOUBLE_EQ(level.position.x, tilted.position.x);
+    const tf2::Matrix3x3 R = rotOf(level);
+    EXPECT_NEAR(R.getColumn(0).y(), 0.0, 1e-9);  // heading kept: along +x
+    EXPECT_GT(R.getColumn(0).x(), 0.0);
+    EXPECT_NEAR(R.getColumn(2).z(), 0.0, 1e-9);  // no roll: the closing axis is level
+    EXPECT_GT(R.getColumn(1).z(), 0.8);          // palm up
+}
+
+// A left hand's goal is the scoop turned over about the fingers (handGoalFromGrasp); levelling
+// keeps it turned over.
+TEST(Scoop, LevelScoopKeepsALeftHandTurnedOver)
+{
+    const tf2::Vector3 up(0.0, 0.0, 1.0);
+    const auto         left  = g1_manipulation::handGoalFromGrasp(scoopAt(0.4), true);
+    const auto         level = g1_manipulation::levelScoop(left, up, 0.4363);
+    EXPECT_LT(rotOf(level).getColumn(1).z(), -0.8);
+    EXPECT_NEAR(g1_manipulation::fingerPitch(level.orientation, up), 0.4363, 1e-9);
+}
+
+// With the pelvis leaning, the slide runs level with the world, not the pelvis.
+TEST(Scoop, SlideBackRunsLevelWithTheWorld)
+{
+    const tf2::Vector3 up    = tf2::Vector3(0.2, 0.0, 1.0).normalized();  // pelvis pitched
+    const auto         grasp = g1_manipulation::levelScoop(scoopAt(0.4), up, 0.4363);
+    const auto         back  = g1_manipulation::slideBack(grasp, 0.11, up);
+    const tf2::Vector3 d(
+        back.position.x - grasp.position.x,
+        back.position.y - grasp.position.y,
+        back.position.z - grasp.position.z);
+    EXPECT_NEAR(d.length(), 0.11, 1e-9);
+    EXPECT_NEAR(d.dot(up), 0.0, 1e-9);
+    const auto above = g1_manipulation::raised(back, up, 0.08);
+    EXPECT_NEAR(above.position.z - back.position.z, 0.08 * up.z(), 1e-9);
+}

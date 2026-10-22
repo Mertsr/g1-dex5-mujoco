@@ -145,23 +145,79 @@ bool isScoopGrasp(const std::string& grasp_name)
     return ("_" + grasp_name + "_").find("_scoop_") != std::string::npos;
 }
 
-// `pose` moved `distance` straight back along its fingers' heading, level: where a scoop starts
-// (in front of the edge, at the same height) and where it slides back out to.
-geometry_msgs::msg::Pose slideBack(const geometry_msgs::msg::Pose& pose, double distance)
+namespace
+{
+// The fingers' direction of a pose, with its component along `up` removed; zero if they point
+// straight along it.
+tf2::Vector3 levelHeading(const geometry_msgs::msg::Quaternion& orientation, const tf2::Vector3& up)
 {
     tf2::Quaternion q;
-    tf2::fromMsg(pose.orientation, q);
-    tf2::Vector3 heading = tf2::Matrix3x3(q).getColumn(0);
-    heading.setZ(0.0);
-    geometry_msgs::msg::Pose back = pose;
+    tf2::fromMsg(orientation, q);
+    const tf2::Vector3 x       = tf2::Matrix3x3(q).getColumn(0);
+    tf2::Vector3       heading = x - up * x.dot(up);
     if (heading.length() < 1e-6)
     {
-        return back;
+        return tf2::Vector3(0.0, 0.0, 0.0);
     }
-    heading.normalize();
+    return heading.normalized();
+}
+}  // namespace
+
+geometry_msgs::msg::Pose
+slideBack(const geometry_msgs::msg::Pose& pose, double distance, const tf2::Vector3& up)
+{
+    const tf2::Vector3       heading = levelHeading(pose.orientation, up.normalized());
+    geometry_msgs::msg::Pose back    = pose;
     back.position.x -= distance * heading.x();
     back.position.y -= distance * heading.y();
+    back.position.z -= distance * heading.z();
     return back;
+}
+
+geometry_msgs::msg::Pose
+raised(const geometry_msgs::msg::Pose& pose, const tf2::Vector3& up, double distance)
+{
+    const tf2::Vector3       u   = up.normalized();
+    geometry_msgs::msg::Pose out = pose;
+    out.position.x += distance * u.x();
+    out.position.y += distance * u.y();
+    out.position.z += distance * u.z();
+    return out;
+}
+
+geometry_msgs::msg::Pose
+levelScoop(const geometry_msgs::msg::Pose& pose, const tf2::Vector3& up, double pitch)
+{
+    const tf2::Vector3 u       = up.normalized();
+    const tf2::Vector3 heading = levelHeading(pose.orientation, u);
+    if (heading.length() < 0.5)
+    {
+        return pose;
+    }
+    tf2::Quaternion q;
+    tf2::fromMsg(pose.orientation, q);
+    const tf2::Vector3 y_was = tf2::Matrix3x3(q).getColumn(1);
+    const tf2::Vector3 fx    = heading * std::cos(pitch) - u * std::sin(pitch);
+    tf2::Vector3       fy    = heading * std::sin(pitch) + u * std::cos(pitch);
+    if (fy.dot(y_was) < 0.0)
+    {
+        fy = -fy;  // a left hand's goal: turned over about the fingers
+    }
+    const tf2::Vector3 fz = fx.cross(fy);
+    const tf2::Matrix3x3 rot(fx.x(), fy.x(), fz.x(), fx.y(), fy.y(), fz.y(), fx.z(), fy.z(), fz.z());
+    tf2::Quaternion level;
+    rot.getRotation(level);
+    geometry_msgs::msg::Pose out = pose;
+    out.orientation              = tf2::toMsg(level);
+    return out;
+}
+
+double fingerPitch(const geometry_msgs::msg::Quaternion& orientation, const tf2::Vector3& up)
+{
+    tf2::Quaternion q;
+    tf2::fromMsg(orientation, q);
+    const double down = -tf2::Matrix3x3(q).getColumn(0).dot(up.normalized());
+    return std::asin(std::clamp(down, -1.0, 1.0));
 }
 
 std::string GraspVariant::suffix() const
@@ -290,6 +346,9 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
     side_grasp_ik_timeout_s_ = declare_parameter<double>("side_grasp_ik_timeout_s", 0.5);
+    // Each placement of a scoop is screened with IK this long per pose: there are up to 25 of
+    // them, most of the ones that fail fail on the first pose.
+    scoop_variant_ik_timeout_s_ = declare_parameter<double>("scoop_variant_ik_timeout_s", 0.1);
     // A scoop grasp starts this far back from the grasp along the fingers' heading, at the
     // grasp's height (the fingertips 1-2 cm in front of the edge), and comes down to there from
     // this far above it.
@@ -339,10 +398,57 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
         std::vector<double>{ 0.002, 0.352, -0.050 });
     scoop_clamp_pitch_rad_ =
         declare_parameter<double>("scoop_clamp_pitch_deg", 20.0) * M_PI / 180.0;
-    // Where the clamping hand is planned to before it comes down to its start: back along its
-    // fingers and up from it (the start itself is low over the table, inside its voxels).
-    scoop_clamp_pre_back_m_ = declare_parameter<double>("scoop_clamp_pre_back_m", 0.12);
-    scoop_clamp_pre_up_m_   = declare_parameter<double>("scoop_clamp_pre_up_m", 0.06);
+    // Where the clamping hand is planned to before it comes down to its start (the start itself
+    // is low over the table, inside its voxels): (back along its fingers, up) pairs, tried in
+    // turn until one is reachable -- which one is depends on where the robot stands.
+    scoop_clamp_pre_m_ = declare_parameter<std::vector<double>>(
+        "scoop_clamp_approaches",
+        std::vector<double>{ 0.12, 0.06, 0.0, 0.08 });
+    // The scoop, level with the world: its fingers this far below the horizontal whatever the
+    // part's estimated tilt (published scoops are 25 degrees), and up taken from gravity_frame,
+    // not the pelvis. Once the hand is down at the table, a hand more than
+    // scoop_pitch_tolerance_deg off that (the robot leaning as it reaches) stops the slide: flat,
+    // the hand's base meets the table's edge.
+    gravity_frame_   = declare_parameter<std::string>("gravity_frame", "odom");
+    scoop_pitch_rad_ = declare_parameter<double>("scoop_pitch_deg", 25.0) * M_PI / 180.0;
+    scoop_pitch_tolerance_rad_ =
+        declare_parameter<double>("scoop_pitch_tolerance_deg", 8.0) * M_PI / 180.0;
+    // Where the robot stands is not exact. A scoop is also tried with the gripping hand turned
+    // about the vertical (deg, counter-clockwise seen from above, for the right hand; mirrored
+    // for the left) from square to the edge, and the clamping hand turned too, in the order
+    // given, until both hands reach: in MuJoCo that widens the stances the two-hand scoop works
+    // from (see the README). Only the turns that held there: the right hand turned clockwise
+    // grips the edge so that the panel twists and the clamp misses it (sag 13-15 degrees, a
+    // 5 N push lost it). Not shifted along the edge either: the panel then hangs from a
+    // different point, sags by a different angle, and the clamp's offset no longer finds it.
+    {
+        const auto to_rad = [](const std::vector<double>& deg) {
+            std::vector<double> rad;
+            for (const double d : deg)
+            {
+                rad.push_back(d * M_PI / 180.0);
+            }
+            return rad;
+        };
+        scoop_turns_rad_       = to_rad(declare_parameter<std::vector<double>>(
+            "scoop_turns_deg",
+            std::vector<double>{ 0.0, 10.0, 20.0 }));
+        scoop_clamp_turns_rad_ = to_rad(declare_parameter<std::vector<double>>(
+            "scoop_clamp_turns_deg",
+            std::vector<double>{ 0.0, 10.0, 20.0 }));
+    }
+    // Where the right hand's scoop point is best seen from, in the pelvis frame (x ahead, y
+    // left): the middle of the stances it works from. Only for telling the user where to stand.
+    scoop_stance_aim_ = declare_parameter<std::vector<double>>(
+        "scoop_stance_aim",
+        std::vector<double>{ 0.42, -0.14 });
+    if (scoop_clamp_pre_m_.empty() || scoop_clamp_pre_m_.size() % 2 != 0 ||
+        scoop_turns_rad_.empty() || scoop_clamp_turns_rad_.empty() || scoop_stance_aim_.size() != 2)
+    {
+        throw std::runtime_error(
+            "scoop_clamp_approaches needs (back, up) pairs, scoop_turns_deg and "
+            "scoop_clamp_turns_deg at least one entry, scoop_stance_aim two");
+    }
     if (scoop_clamp_offset_.size() != 3 ||
         (scoop_second_hand_ != "clamp" && scoop_second_hand_ != "support" &&
          scoop_second_hand_ != "none"))
@@ -806,11 +912,20 @@ bool G1ManipulationServer::moveLinear(
     group.setEndEffectorLink(previous);
     if (fraction < linear_min_fraction_)
     {
+        // Which it is -- something in the way, or the arm itself (a joint limit, or an IK jump
+        // between the waypoints) -- is the same call without the collision check.
+        group.setEndEffectorLink(link);
+        moveit_msgs::msg::RobotTrajectory unchecked;
+        const double free = group.computeCartesianPath({ pose }, 0.005, 0.0, unchecked, false);
+        group.setEndEffectorLink(previous);
         RCLCPP_ERROR(
             get_logger(),
-            "%s: only %.0f%% of the straight line is reachable without collision",
+            "%s: only %.0f%% of the straight line is reachable without collision (%.0f%% "
+            "ignoring collisions: %s)",
             what.c_str(),
-            100.0 * fraction);
+            100.0 * fraction,
+            100.0 * free,
+            free > fraction + 1e-3 ? "something is in the way" : "the arm cannot follow the line");
         return false;
     }
     // A Cartesian path comes back with timing for full speed; slow it to the skills' scaling,
@@ -905,6 +1020,89 @@ std::optional<bool> G1ManipulationServer::hasIk(
     return std::nullopt;
 }
 
+void G1ManipulationServer::refreshUp()
+{
+    // The planning frame is the pelvis, which leans and pitches as the robot balances a reaching
+    // arm; the table is level with the world. Up is the gravity frame's z seen from the pelvis.
+    try
+    {
+        const auto t = tf_buffer_->lookupTransform(
+            planning_frame_,
+            gravity_frame_,
+            tf2::TimePointZero,
+            tf2::durationFromSec(0.5));
+        tf2::Quaternion q;
+        tf2::fromMsg(t.transform.rotation, q);
+        up_ = tf2::quatRotate(q, tf2::Vector3(0.0, 0.0, 1.0)).normalized();
+        RCLCPP_INFO(
+            get_logger(),
+            "the pelvis leans %.1f deg from the vertical (%s)",
+            std::acos(std::clamp(up_.z(), -1.0, 1.0)) * 180.0 / M_PI,
+            gravity_frame_.c_str());
+    }
+    catch (const tf2::TransformException& e)
+    {
+        up_ = tf2::Vector3(0.0, 0.0, 1.0);
+        RCLCPP_WARN(
+            get_logger(),
+            "no TF from %s to %s (%s): taking the pelvis as level",
+            gravity_frame_.c_str(),
+            planning_frame_.c_str(),
+            e.what());
+    }
+}
+
+G1ManipulationServer::ClampPoses G1ManipulationServer::clampPoses(
+    const geometry_msgs::msg::Pose& lifted, double gripping_turn, bool clamping_is_left,
+    double pre_back, double pre_up, double clamping_turn) const
+{
+    // Relative to the part's edge, not to the gripping hand, which may have come in turned by
+    // `gripping_turn`: the edge's inward normal is that hand's level heading turned back. From
+    // the gripping hand's lifted grasp point: along that normal, along the edge toward the
+    // clamping hand's own side (its left for the left hand), and up. Palm up, the fingers along
+    // the normal turned by `clamping_turn` and pitched scoop_clamp_pitch down.
+    tf2::Quaternion lq;
+    tf2::fromMsg(lifted.orientation, lq);
+    tf2::Vector3 heading      = tf2::Matrix3x3(lq).getColumn(0);
+    heading                   = (heading - up_ * heading.dot(up_)).normalized();
+    const tf2::Vector3 normal = tf2::quatRotate(tf2::Quaternion(up_, -gripping_turn), heading);
+    tf2::Vector3       side   = up_.cross(normal);  // along the edge, to the gripping hand's left
+    if (!clamping_is_left)
+    {
+        side = -side;
+    }
+    const tf2::Vector3 at = tf2::Vector3(lifted.position.x, lifted.position.y, lifted.position.z) +
+                            normal * scoop_clamp_offset_[0] + side * scoop_clamp_offset_[1] +
+                            up_ * scoop_clamp_offset_[2];
+    const tf2::Vector3   fingers = tf2::quatRotate(tf2::Quaternion(up_, clamping_turn), normal);
+    const tf2::Vector3   across  = fingers.cross(up_);
+    const tf2::Matrix3x3 flat(
+        fingers.x(),
+        up_.x(),
+        across.x(),
+        fingers.y(),
+        up_.y(),
+        across.y(),
+        fingers.z(),
+        up_.z(),
+        across.z());
+    tf2::Quaternion fq;
+    flat.getRotation(fq);
+    geometry_msgs::msg::Pose palm_up;
+    palm_up.position.x  = at.x();
+    palm_up.position.y  = at.y();
+    palm_up.position.z  = at.z();
+    palm_up.orientation = tf2::toMsg(fq);
+    palm_up             = levelScoop(palm_up, up_, scoop_clamp_pitch_rad_);
+
+    ClampPoses out;
+    out.at       = handGoalFromGrasp(palm_up, clamping_is_left);
+    out.in_front = slideBack(out.at, scoop_slide_m_, up_);
+    out.pre      = raised(slideBack(out.in_front, pre_back, up_), up_, pre_up);
+    out.lifted   = raised(out.at, up_, scoop_support_lift_m_);
+    return out;
+}
+
 bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what)
 {
     auto planned = group.plan(plan);
@@ -968,10 +1166,23 @@ bool G1ManipulationServer::moveBothTo(
         return false;
     }
     std::map<std::string, double> ja, jb;
-    if (!hasIk(a.arm_group, a.grasp_frame, pose_a, &ja, side_grasp_ik_timeout_s_).value_or(false) ||
-        !hasIk(b.arm_group, b.grasp_frame, pose_b, &jb, side_grasp_ik_timeout_s_).value_or(false))
+    const bool                    reach_a =
+        hasIk(a.arm_group, a.grasp_frame, pose_a, &ja, side_grasp_ik_timeout_s_).value_or(false);
+    const bool reach_b =
+        reach_a &&
+        hasIk(b.arm_group, b.grasp_frame, pose_b, &jb, side_grasp_ik_timeout_s_).value_or(false);
+    if (!reach_b)
     {
-        RCLCPP_ERROR(get_logger(), "%s: no IK for one of the two hands", what.c_str());
+        const ArmContext&               out = reach_a ? b : a;
+        const geometry_msgs::msg::Pose& p   = reach_a ? pose_b : pose_a;
+        RCLCPP_ERROR(
+            get_logger(),
+            "%s: the %s hand cannot reach pelvis (%.2f, %.2f, %.2f): stand nearer the target",
+            what.c_str(),
+            out.is_left ? "left" : "right",
+            p.position.x,
+            p.position.y,
+            p.position.z);
         return false;
     }
     const moveit::core::RobotStatePtr start = both->getCurrentState();
@@ -1108,6 +1319,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
         candidates.push_back({ r.hypothesis.class_id, pose });
     }
+    refreshUp();
+
     // Fingers pointing most AWAY from the robot first: a part's grasps usually come as mirror
     // pairs tipped toward either end of it, and the one leaning away is the one an arm reaching
     // out from the pelvis can take. The others are still tried, in that order.
@@ -1134,6 +1347,11 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::string                             open_shape = "open", closed_shape = "closed";
     /// A scoop's start: down at the surface in front of the edge, slid in from there.
     std::optional<geometry_msgs::msg::Pose> entry_goal;
+    /// Which of scoop_clamp_approaches the other hand comes in from (-1: it cannot clamp), and
+    /// how the two hands are turned from square to the edge.
+    int    clamp_approach = -1;
+    double scoop_turn     = 0.0;
+    double clamp_turn     = 0.0;
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
     // defined state rather than part-way into a grasp. That is what makes the behavior tree's
@@ -1161,7 +1379,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 geometry_msgs::msg::Pose out = now;
                 if (entry_goal)
                 {
-                    out = slideBack(now, scoop_slide_m_);
+                    out = slideBack(now, scoop_slide_m_, up_);
                     if (!moveLinear(*arm_group, out, arm.grasp_frame, "back out"))
                     {
                         out = now;
@@ -1169,6 +1387,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 }
                 geometry_msgs::msg::Pose up = out;
                 up.position.z += entry_goal ? scoop_hover_m_ : grasp_approach_m_;
+                if (entry_goal)
+                {
+                    up = raised(out, up_, scoop_hover_m_);
+                }
                 if (!moveLinear(*arm_group, up, arm.grasp_frame, "back out"))
                 {
                     RCLCPP_ERROR(
@@ -1202,6 +1424,38 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // can reach depends on where the robot stands, so every candidate is expanded into tilts
     // (and, optionally, the hand turned over), checked with IK first -- cheap -- and only the
     // reachable ones are planned. The configured tilt comes first, then the nearest ones.
+    // Where to step, for a right-hand scoop point at `grasp` (planning frame) that no placement
+    // reaches: from where it is now to scoop_stance_aim, the middle of the stances the two-hand
+    // scoop was measured to work from, and how far to turn to face the edge square.
+    const auto stanceHint = [&](const geometry_msgs::msg::Pose& grasp) {
+        tf2::Quaternion q;
+        tf2::fromMsg(grasp.orientation, q);
+        tf2::Vector3 heading = tf2::Matrix3x3(q).getColumn(0);
+        heading              = heading - up_ * heading.dot(up_);
+        const double turn    = std::atan2(heading.y(), heading.x()) * 180.0 / M_PI;
+        const double ahead   = grasp.position.x - scoop_stance_aim_[0];
+        const double left    = grasp.position.y - scoop_stance_aim_[1];
+        char         hint[260];
+        std::snprintf(
+            hint,
+            sizeof hint,
+            "the right hand's scoop point is %.2f m ahead and %.2f m %s of the pelvis, best from "
+            "about %.2f ahead and %.2f %s: step %.0f cm %s and %.0f cm %s%s",
+            grasp.position.x,
+            std::abs(grasp.position.y),
+            grasp.position.y < 0.0 ? "right" : "left",
+            scoop_stance_aim_[0],
+            std::abs(scoop_stance_aim_[1]),
+            scoop_stance_aim_[1] < 0.0 ? "right" : "left",
+            std::abs(ahead) * 100.0,
+            ahead >= 0.0 ? "forward" : "back",
+            std::abs(left) * 100.0,
+            left >= 0.0 ? "left" : "right",
+            std::abs(turn) > 10.0 ? (turn > 0.0 ? ", and turn left to face the edge square" :
+                                                  ", and turn right to face the edge square") :
+                                    "");
+        return std::string(hint);
+    };
     struct Attempt
     {
         std::string              label;
@@ -1214,9 +1468,15 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         std::map<std::string, double> pregrasp_joints;
         /// A scoop's start, below the pregrasp: see entry_goal.
         std::optional<geometry_msgs::msg::Pose> entry;
+        /// A scoop the other hand can clamp: which of scoop_clamp_approaches it comes in from
+        /// (-1: none, the part stays in one hand), and how both hands are turned (rad).
+        int    clamp_approach{ -1 };
+        double turn{ 0.0 };
+        double clamp_turn{ 0.0 };
     };
     std::vector<Attempt> attempts;
     std::string          unreachable;
+    std::string          scoop_stance_hint;  // where to stand instead, when no scoop is reachable
     int                  ik_checked = 0;
     for (const Candidate& c : candidates)
     {
@@ -1237,11 +1497,14 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
         int reachable_here = 0;
         const std::string cname          = graspNameOf(c.name);
-        // A scoop (a hand under a panel's edge): tried exactly as published, by the hand its name
-        // says, and only from the side facing the robot (fingers pointing away from it). The hand
-        // goes to the pregrasp above the start, comes straight down in front of the edge to the
-        // surface the part lies on, slides in along its fingers under the edge, closes the thumb
-        // down on top and lifts straight up. All three poses must have an IK solution.
+        // A scoop (a hand under a panel's edge), by the hand its name says, and only from the side
+        // facing the robot (fingers pointing away from it). The hand goes to the pregrasp above
+        // the start, comes straight down in front of the edge to the surface the part lies on,
+        // slides in along its fingers under the edge, closes the thumb down on top and lifts
+        // straight up; in two hands the other hand then clamps the same edge's other half. Built
+        // level with the world (levelScoop), and tried as published first, then turned about the
+        // vertical (each hand, nearest first) until every pose of both hands has an IK solution:
+        // where the robot stands is not exact.
         if (isScoopGrasp(cname))
         {
             // Logged, every one: a scoop silently skipped leaves the pick on whatever grasp comes
@@ -1257,8 +1520,16 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     side_grasp_min_forward_);
                 continue;
             }
+            // As configured (the published one first, then the nearest turns).
+            const std::vector<double>& turns = scoop_turns_rad_;
             for (const std::string& a : arms_for(y))
             {
+                // The clamp's offset was measured with the right hand gripping (scoop_right_near,
+                // the left clamping the edge's other half, toward the panel's far end); mirrored,
+                // the right hand would clamp past the panel's end. The left hand's scoop is
+                // picked in one hand.
+                const bool clamping =
+                    scoop_two_hand_ && scoop_second_hand_ == "clamp" && a == "right";
                 if (!graspIsForArm(cname, a) ||
                     static_cast<int>(attempts.size()) >= grasp_max_plans_)
                 {
@@ -1267,85 +1538,211 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 ArmContext ctx;
                 resolveArm(a, ctx);
                 usePinchFrame(ctx);
-                Attempt at{ c.name,
-                            a,
-                            *c.pose,
-                            handGoalFromGrasp(*c.pose, ctx.is_left),
-                            geometry_msgs::msg::Pose() };
-                at.grasp.position.z += scoop_raise_m_;
-                at.entry    = slideBack(at.grasp, scoop_slide_m_);
-                at.pregrasp = *at.entry;
-                at.pregrasp.position.z += scoop_hover_m_;
-                ++ik_checked;
-                const auto grasp_ik = hasIk(
-                    ctx.arm_group,
-                    ctx.grasp_frame,
-                    at.grasp,
-                    nullptr,
-                    side_grasp_ik_timeout_s_);
-                if (!grasp_ik)
+                ArmContext other;
+                resolveArm(a == "left" ? std::string("right") : std::string("left"), other);
+                usePinchFrame(other);
+                const geometry_msgs::msg::Pose published =
+                    levelScoop(handGoalFromGrasp(*c.pose, ctx.is_left), up_, scoop_pitch_rad_);
+                tf2::Quaternion pq;
+                tf2::fromMsg(published.orientation, pq);
+
+                std::optional<Attempt> one_hand;  // the nearest variant only this hand reaches
+                std::optional<Attempt> two_hands;
+                int                    first_ok = 0;
+                int                    tried    = 0;
+                for (const double unsigned_turn : turns)
                 {
-                    fail(
-                        Pick::Feedback::PHASE_PREGRASP,
-                        "move_group's /compute_ik did not answer (MoveIt error " +
-                            std::to_string(ik_broken_code_) +
-                            "); is move_group running with its kinematics plugin?");
-                    return;
+                    const double turn = ctx.is_left ? -unsigned_turn : unsigned_turn;  // mirrored
+                    ++tried;
+                    // Turned about the vertical through the grasp point: the same point under
+                    // the edge, the fingers going in at an angle.
+                    geometry_msgs::msg::Pose g      = published;
+                    const tf2::Quaternion    turned = tf2::Quaternion(up_, turn) * pq;
+                    g.orientation                   = tf2::toMsg(turned.normalized());
+
+                    char label[96];
+                    std::snprintf(
+                        label,
+                        sizeof label,
+                        "%s turned %+.0f deg",
+                        c.name.c_str(),
+                        turn * 180.0 / M_PI);
+                    Attempt at{ turn == 0.0 ? c.name : std::string(label),
+                                a,
+                                *c.pose,
+                                raised(g, up_, scoop_raise_m_),
+                                geometry_msgs::msg::Pose() };
+                    at.entry    = slideBack(at.grasp, scoop_slide_m_, up_);
+                    at.pregrasp = raised(*at.entry, up_, scoop_hover_m_);
+                    ++ik_checked;
+                    const auto grasp_ik = hasIk(
+                        ctx.arm_group,
+                        ctx.grasp_frame,
+                        at.grasp,
+                        nullptr,
+                        scoop_variant_ik_timeout_s_);
+                    if (!grasp_ik)
+                    {
+                        fail(
+                            Pick::Feedback::PHASE_PREGRASP,
+                            "move_group's /compute_ik did not answer (MoveIt error " +
+                                std::to_string(ik_broken_code_) +
+                                "); is move_group running with its kinematics plugin?");
+                        return;
+                    }
+                    const geometry_msgs::msg::Pose lifted = raised(at.grasp, up_, lift_height_m_);
+                    const auto                     reach  = [&](const ArmContext&               who,
+                                           const geometry_msgs::msg::Pose& p) {
+                        return hasIk(
+                                   who.arm_group,
+                                   who.grasp_frame,
+                                   p,
+                                   nullptr,
+                                   scoop_variant_ik_timeout_s_)
+                            .value_or(false);
+                    };
+                    // The pregrasp's joints are the goal planned to, so they must not collide:
+                    // with the hand palm up near the body's middle, KDL's first answer often
+                    // swings the shoulder into the torso, and the planner then rejects the goal.
+                    const char* missing = !*grasp_ik             ? "the grasp" :
+                                          !reach(ctx, *at.entry) ? "the start" :
+                                          !reach(ctx, lifted)    ? "the lift" :
+                                          !hasIk(
+                                               ctx.arm_group,
+                                               ctx.grasp_frame,
+                                               at.pregrasp,
+                                               &at.pregrasp_joints,
+                                               side_grasp_ik_timeout_s_,
+                                               /*avoid_collisions=*/true)
+                                                  .value_or(false) ?
+                                                                "the pregrasp (collision-free)" :
+                                                                nullptr;
+                    if (missing)
+                    {
+                        RCLCPP_INFO(
+                            get_logger(),
+                            "pick %s:   %s with the %s hand: %s not reachable",
+                            object_id.c_str(),
+                            at.label.c_str(),
+                            a.c_str(),
+                            missing);
+                        continue;
+                    }
+                    ++first_ok;
+                    if (!one_hand)
+                    {
+                        one_hand = at;
+                    }
+                    if (!clamping)
+                    {
+                        break;
+                    }
+                    // Both lifted together, then the clamping hand's whole way in, from the first
+                    // approach point it reaches.
+                    if (!reach(ctx, raised(lifted, up_, scoop_support_lift_m_)))
+                    {
+                        continue;
+                    }
+                    at.turn = turn;
+                    for (const double unsigned_clamp_turn : scoop_clamp_turns_rad_)
+                    {
+                        const double clamp_turn =
+                            other.is_left ? unsigned_clamp_turn : -unsigned_clamp_turn;
+                        for (std::size_t k = 0; k + 1 < scoop_clamp_pre_m_.size() && !two_hands;
+                             k += 2)
+                        {
+                            const ClampPoses cp = clampPoses(
+                                lifted,
+                                turn,
+                                other.is_left,
+                                scoop_clamp_pre_m_[k],
+                                scoop_clamp_pre_m_[k + 1],
+                                clamp_turn);
+                            // The clamp first: no approach point helps a clamp it cannot reach.
+                            const char* clamp_missing =
+                                !reach(other, cp.at)       ? "the clamp" :
+                                !reach(other, cp.lifted)   ? "the lift" :
+                                !reach(other, cp.in_front) ? "the start" :
+                                !reach(other, cp.pre)      ? "the approach point" :
+                                                             nullptr;
+                            if (!clamp_missing)
+                            {
+                                at.clamp_approach = static_cast<int>(k / 2);
+                                at.clamp_turn     = clamp_turn;
+                                two_hands         = at;
+                                break;
+                            }
+                            RCLCPP_INFO(
+                                get_logger(),
+                                "pick %s:   %s, the other hand clamping turned %+.0f deg from "
+                                "approach "
+                                "%zu: %s not reachable",
+                                object_id.c_str(),
+                                at.label.c_str(),
+                                clamp_turn * 180.0 / M_PI,
+                                k / 2,
+                                clamp_missing);
+                            if (clamp_missing != std::string("the start") &&
+                                clamp_missing != std::string("the approach point"))
+                            {
+                                break;
+                            }
+                        }
+                        if (two_hands)
+                        {
+                            break;
+                        }
+                    }
+                    if (two_hands)
+                    {
+                        break;
+                    }
                 }
-                const bool entry_ik = *grasp_ik && hasIk(
-                                                       ctx.arm_group,
-                                                       ctx.grasp_frame,
-                                                       *at.entry,
-                                                       nullptr,
-                                                       side_grasp_ik_timeout_s_)
-                                                       .value_or(false);
-                // The pregrasp's joints are the goal planned to, so they must not collide: with
-                // the hand palm up near the body's middle, KDL's first answer often swings the
-                // shoulder into the torso, and the planner then rejects the goal outright.
-                const bool pre_ik = entry_ik && hasIk(
-                                                    ctx.arm_group,
-                                                    ctx.grasp_frame,
-                                                    at.pregrasp,
-                                                    &at.pregrasp_joints,
-                                                    side_grasp_ik_timeout_s_,
-                                                    /*avoid_collisions=*/true)
-                                                    .value_or(false);
+                const std::string other_name = a == "left" ? "right" : "left";
+                const std::string clamp_note =
+                    !clamping ? std::string() :
+                    two_hands ? " (the " + other_name + " hand can clamp)" :
+                                " (the " + other_name + " hand can clamp at none of them)";
+                const std::string taking = two_hands ? "taking " + two_hands->label :
+                                           one_hand ? "taking " + one_hand->label + " in one hand" :
+                                                      std::string("none");
                 RCLCPP_INFO(
                     get_logger(),
-                    "pick %s: %s with the %s hand: grasp at pelvis (%.3f, %.3f, %.3f) %s, start "
-                    "%s, "
-                    "pregrasp %s",
+                    "pick %s: %s with the %s hand: %d of %d placements reachable by it%s; %s",
                     object_id.c_str(),
                     c.name.c_str(),
                     a.c_str(),
-                    at.grasp.position.x,
-                    at.grasp.position.y,
-                    at.grasp.position.z,
-                    *grasp_ik ? "reachable" : "NOT reachable",
-                    !*grasp_ik ? "-" :
-                    entry_ik   ? "reachable" :
-                                 "NOT reachable",
-                    !entry_ik ? "-" :
-                    pre_ik    ? "reachable" :
-                                "NOT reachable");
-                if (pre_ik)
+                    first_ok,
+                    tried,
+                    clamp_note.c_str(),
+                    taking.c_str());
+                if (clamping && !two_hands && cname.find("_right_") != std::string::npos)
                 {
-                    attempts.push_back(at);
+                    scoop_stance_hint = stanceHint(*c.pose);
+                }
+                if (two_hands || one_hand)
+                {
+                    attempts.push_back(two_hands ? *two_hands : *one_hand);
                     ++reachable_here;
                 }
             }
             if (reachable_here == 0 && static_cast<int>(attempts.size()) < grasp_max_plans_)
             {
-                char where[160];
+                char where[200];
                 std::snprintf(
                     where,
                     sizeof where,
-                    "%s: scoop not reachable, grasp at pelvis (%.2f, %.2f, %.2f) m",
+                    "%s: scoop not reachable at any placement, grasp at pelvis (%.2f, %.2f, %.2f) "
+                    "m",
                     c.name.c_str(),
                     c.pose->position.x,
                     c.pose->position.y,
                     c.pose->position.z);
                 unreachable += (unreachable.empty() ? "" : "; ") + std::string(where);
+                if (cname.find("_right_") != std::string::npos)
+                {
+                    scoop_stance_hint = stanceHint(*c.pose);
+                }
             }
             continue;
         }
@@ -1518,6 +1915,19 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             unreachable.c_str());
     }
 
+    // Two hands first: a scoop both hands reach before any held in one, whatever the candidate
+    // order.
+    std::stable_partition(attempts.begin(), attempts.end(), [](const Attempt& at) {
+        return at.clamp_approach >= 0;
+    });
+
+    if (attempts.empty() && !scoop_stance_hint.empty())
+    {
+        fail(
+            Pick::Feedback::PHASE_PREGRASP,
+            "no scoop is reachable from here: " + scoop_stance_hint);
+        return;
+    }
     if (attempts.empty())
     {
         fail(Pick::Feedback::PHASE_PREGRASP,
@@ -1558,6 +1968,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         grasp_goal    = at.grasp;
         pregrasp_goal = at.pregrasp;
         entry_goal    = at.entry;
+        clamp_approach = at.clamp_approach;
+        scoop_turn     = at.turn;
+        clamp_turn     = at.clamp_turn;
         RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", object_id.c_str(),
                     at.label.c_str(), arm_name.c_str());
 
@@ -1634,46 +2047,62 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // Re-aimed at where the part is NOW, not where it was when the pick started: the tracker
     // keeps measuring it while the arm moves, and a part nudged on the way in (or simply seen
     // better from closer) moves the grasp with it. A part that moved a lot was knocked, and
-    // grasping at a guess would knock it further.
-    if (grasp_pose)
-    {
-        if (const auto fresh = lookUpObject(object_id))
+    // grasping at a guess would knock it further. False when it failed the pick.
+    //
+    // A scoop is then re-levelled: the re-aim turns the hand with the part's estimated pose, and
+    // a panel seen from closer a few degrees tilted would tip the hand flat; and the pelvis may
+    // lean differently now the arm is out. The hand keeps its heading and its point, pitched
+    // scoop_pitch below the world's horizontal, and starts scoop_slide_m back from it.
+    const auto reaim = [&]() -> bool {
+        if (grasp_pose)
         {
-            const std::string fresh_frame =
-                fresh->header.frame_id.empty() ? object_frame : fresh->header.frame_id;
-            if (const auto now_pose = toPlanningFrame(fresh->results.front().pose.pose, fresh_frame))
+            if (const auto fresh = lookUpObject(object_id))
             {
-                tf2::Transform then_T, now_T, grasp_T;
-                tf2::fromMsg(aimed_object_pose, then_T);
-                tf2::fromMsg(*now_pose, now_T);
-                const tf2::Transform moved = now_T * then_T.inverse();
-                const double         shift = moved.getOrigin().length();
-                const double         turn  = moved.getRotation().getAngle();
-                if (shift > reaim_max_shift_m_)
+                const std::string fresh_frame =
+                    fresh->header.frame_id.empty() ? object_frame : fresh->header.frame_id;
+                if (const auto now_pose =
+                        toPlanningFrame(fresh->results.front().pose.pose, fresh_frame))
                 {
-                    fail(Pick::Feedback::PHASE_APPROACH,
-                         "the part moved " + std::to_string(static_cast<int>(shift * 1000)) +
-                             " mm since the pick started (knocked?); not grasping at a guess");
-                    return;
-                }
-                if (shift > 0.003 || turn > 0.02)
-                {
-                    RCLCPP_INFO(get_logger(), "pick %s: part moved %.1f mm / %.1f deg; re-aiming the grasp",
-                                object_id.c_str(), shift * 1000.0, turn * 180.0 / M_PI);
-                    tf2::fromMsg(grasp_goal, grasp_T);
-                    tf2::toMsg(moved * grasp_T, grasp_goal);
-                    if (entry_goal)
+                    tf2::Transform then_T, now_T, grasp_T;
+                    tf2::fromMsg(aimed_object_pose, then_T);
+                    tf2::fromMsg(*now_pose, now_T);
+                    const tf2::Transform moved = now_T * then_T.inverse();
+                    const double         shift = moved.getOrigin().length();
+                    const double         turn  = moved.getRotation().getAngle();
+                    if (shift > reaim_max_shift_m_)
                     {
-                        tf2::Transform entry_T;
-                        tf2::fromMsg(*entry_goal, entry_T);
-                        geometry_msgs::msg::Pose moved_entry;
-                        tf2::toMsg(moved * entry_T, moved_entry);
-                        entry_goal = moved_entry;
+                        fail(
+                            Pick::Feedback::PHASE_APPROACH,
+                            "the part moved " + std::to_string(static_cast<int>(shift * 1000)) +
+                                " mm since the pick started (knocked?); not grasping at a guess");
+                        return false;
                     }
-                    aimed_object_pose = *now_pose;
+                    if (shift > 0.003 || turn > 0.02)
+                    {
+                        RCLCPP_INFO(
+                            get_logger(),
+                            "pick %s: part moved %.1f mm / %.1f deg; re-aiming the grasp",
+                            object_id.c_str(),
+                            shift * 1000.0,
+                            turn * 180.0 / M_PI);
+                        tf2::fromMsg(grasp_goal, grasp_T);
+                        tf2::toMsg(moved * grasp_T, grasp_goal);
+                        aimed_object_pose = *now_pose;
+                    }
                 }
             }
         }
+        if (entry_goal)
+        {
+            refreshUp();
+            grasp_goal = levelScoop(grasp_goal, up_, scoop_pitch_rad_);
+            entry_goal = slideBack(grasp_goal, scoop_slide_m_, up_);
+        }
+        return true;
+    };
+    if (!reaim())
+    {
+        return;
     }
 
     // A scoop first comes straight down in front of the edge to the surface; the approach below
@@ -1683,6 +2112,88 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         fail(
             Pick::Feedback::PHASE_APPROACH,
             "could not lower the hand to the surface in front of the edge");
+        return;
+    }
+    // Down at the table, before sliding in: is the hand really pitched as planned, against the
+    // world's vertical? The arm follows its joints, but a robot leaning back as it reaches tips
+    // the whole hand flatter, and a flat hand's base (the white RH56E2 mount under its wrist)
+    // then meets the table's edge and stops the slide -- or the fingers go in over the lip. A
+    // hand too flat is re-aimed and re-levelled against the lean as it is now, once, a few
+    // centimetres up and back down; still too flat, the pick stops.
+    const auto pitch_now = [&]() -> std::optional<double> {
+        try
+        {
+            refreshUp();
+            const auto t = tf_buffer_->lookupTransform(
+                planning_frame_,
+                arm.grasp_frame,
+                tf2::TimePointZero,
+                tf2::durationFromSec(0.5));
+            const double pitch = fingerPitch(t.transform.rotation, up_);
+            RCLCPP_INFO(
+                get_logger(),
+                "pick %s: down at the table, the fingers point %.1f deg below the horizontal "
+                "(planned %.1f)",
+                object_id.c_str(),
+                pitch * 180.0 / M_PI,
+                scoop_pitch_rad_ * 180.0 / M_PI);
+            return pitch;
+        }
+        catch (const tf2::TransformException& e)
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "pick %s: no TF for %s, the hand's pitch is not checked: %s",
+                object_id.c_str(),
+                arm.grasp_frame.c_str(),
+                e.what());
+            return std::nullopt;
+        }
+    };
+    for (int round = 0; entry_goal; ++round)
+    {
+        const auto pitch = pitch_now();
+        if (!pitch || *pitch >= scoop_pitch_rad_ - scoop_pitch_tolerance_rad_)
+        {
+            break;
+        }
+        if (round == 0)
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "pick %s: the hand is %.0f deg flatter than planned; re-levelling it for the lean",
+                object_id.c_str(),
+                (scoop_pitch_rad_ - *pitch) * 180.0 / M_PI);
+            const geometry_msgs::msg::Pose here = arm_group->getCurrentPose(arm.grasp_frame).pose;
+            if (!moveLinear(
+                    *arm_group,
+                    raised(here, up_, scoop_hover_m_ / 2.0),
+                    arm.grasp_frame,
+                    "scoop: up to re-level") ||
+                !reaim() ||
+                !moveLinear(
+                    *arm_group,
+                    raised(*entry_goal, up_, scoop_hover_m_ / 2.0),
+                    arm.grasp_frame,
+                    "scoop: re-levelled") ||
+                !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent, re-levelled"))
+            {
+                if (goal_handle->is_active())
+                {
+                    fail(Pick::Feedback::PHASE_APPROACH, "could not re-level the hand at the table");
+                }
+                return;
+            }
+            continue;
+        }
+        fail(
+            Pick::Feedback::PHASE_APPROACH,
+            "the hand is " +
+                std::to_string(
+                    static_cast<int>(std::lround((scoop_pitch_rad_ - *pitch) * 180.0 / M_PI))) +
+                " deg flatter than planned at the table, re-levelled once: its base would meet the "
+                "table's edge. The robot is leaning as it reaches; stand nearer the part" +
+                (scoop_stance_hint.empty() ? std::string() : " (" + scoop_stance_hint + ")"));
         return;
     }
 
@@ -1775,6 +2286,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     goal_handle->publish_feedback(feedback);
     geometry_msgs::msg::Pose lifted = grasp_goal;
     lifted.position.z += lift_height_m_;
+    if (entry_goal)
+    {
+        lifted = raised(grasp_goal, up_, lift_height_m_);  // straight up off a level table
+    }
     if (!(grasp_pose ? moveLinear(*arm_group, lifted, arm.grasp_frame, "lift")
                      : moveTo(*arm_group, lifted, arm.grasp_frame, "lift")))
     {
@@ -1793,7 +2308,20 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     tf2::Transform grasp_T_support;
     std::string    support_note;
     const bool     clamp = scoop_second_hand_ == "clamp";
-    if (entry_goal && scoop_two_hand_)
+    if (entry_goal && scoop_two_hand_ && clamp && clamp_approach < 0)
+    {
+        // The candidate check found no placement both hands reach: not attempted, rather than
+        // reaching for it and backing out.
+        const std::string other = arm_name == "left" ? "right" : "left";
+        support_note =
+            "; the " + other +
+            (arm_name == "left" ? std::string(" hand clamps only with the right one gripping") :
+                                  std::string(" hand could not reach the other half from here")) +
+            ", held in one hand" +
+            (scoop_stance_hint.empty() ? std::string() : " (" + scoop_stance_hint + ")");
+        RCLCPP_WARN(get_logger(), "pick %s%s", object_id.c_str(), support_note.c_str());
+    }
+    else if (entry_goal && scoop_two_hand_)
     {
         support_name = arm_name == "left" ? "right" : "left";
         ArmContext support;
@@ -1802,46 +2330,108 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         MoveGroup* support_arm  = groupFor(support.arm_group);
         MoveGroup* support_hand = groupFor(support.hand_group);
 
+        refreshUp();  // the robot leans differently with the part held out
         tf2::Quaternion lq;
         tf2::fromMsg(lifted.orientation, lq);
         tf2::Vector3 heading = tf2::Matrix3x3(lq).getColumn(0);
-        heading.setZ(0.0);
-        heading.normalize();
-        const tf2::Vector3 up(0.0, 0.0, 1.0);
+        const tf2::Vector3 up      = up_;
+        heading                    = (heading - up * heading.dot(up)).normalized();
+        // A clamp from where it was checked to reach (clampPoses: on the clamping hand's own side
+        // of the gripping one); a support under the part's middle.
+        // Checked again now, with the part lifted and the robot leaning as it does now: the
+        // combination found at the start first, then the others, the first the clamping hand
+        // still reaches.
+        std::optional<ClampPoses> reachable_now;
+        if (clamp)
+        {
+            std::vector<std::pair<double, int>> combos{ { clamp_turn,
+                                                          std::max(clamp_approach, 0) } };
+            for (const double t : scoop_clamp_turns_rad_)
+            {
+                for (std::size_t k = 0; 2 * k + 1 < scoop_clamp_pre_m_.size(); ++k)
+                {
+                    combos.emplace_back(support.is_left ? t : -t, static_cast<int>(k));
+                }
+            }
+            const auto reach = [&](const geometry_msgs::msg::Pose& p) {
+                return hasIk(
+                           support.arm_group,
+                           support.grasp_frame,
+                           p,
+                           nullptr,
+                           scoop_variant_ik_timeout_s_)
+                    .value_or(false);
+            };
+            for (const auto& [t, k] : combos)
+            {
+                const ClampPoses c = clampPoses(
+                    lifted,
+                    scoop_turn,
+                    support.is_left,
+                    scoop_clamp_pre_m_[static_cast<std::size_t>(2 * k)],
+                    scoop_clamp_pre_m_[static_cast<std::size_t>(2 * k + 1)],
+                    t);
+                if (reach(c.at) && reach(c.lifted) && reach(c.in_front) && reach(c.pre))
+                {
+                    RCLCPP_INFO(
+                        get_logger(),
+                        "pick %s: the %s hand clamps turned %+.0f deg, from approach %d",
+                        object_id.c_str(),
+                        support_name.c_str(),
+                        t * 180.0 / M_PI,
+                        k);
+                    reachable_now = c;
+                    break;
+                }
+            }
+        }
+        const int        approach = std::max(clamp_approach, 0);
+        const ClampPoses cp =
+            reachable_now ? *reachable_now :
+                            clampPoses(
+                                lifted,
+                                scoop_turn,
+                                support.is_left,
+                                scoop_clamp_pre_m_[static_cast<std::size_t>(2 * approach)],
+                                scoop_clamp_pre_m_[static_cast<std::size_t>(2 * approach + 1)],
+                                clamp_turn);
         tf2::Vector3       side = up.cross(heading);
         const tf2::Vector3 to_middle(
             aimed_object_pose.position.x - grasp_goal.position.x,
             aimed_object_pose.position.y - grasp_goal.position.y,
-            0.0);
+            aimed_object_pose.position.z - grasp_goal.position.z);
         if (side.dot(to_middle) < 0.0)
         {
             side = -side;
         }
-        const std::vector<double>& off = clamp ? scoop_clamp_offset_ : scoop_support_offset_;
-        const tf2::Vector3         at =
+        const tf2::Vector3 under =
             tf2::Vector3(lifted.position.x, lifted.position.y, lifted.position.z) +
-            heading * off[0] + side * off[1] + up * off[2];
+            heading * scoop_support_offset_[0] + side * scoop_support_offset_[1] +
+            up * scoop_support_offset_[2];
         // Palm up, fingers along the heading (the frame the scoop's grasps are written in: x the
-        // fingers, y out of the palm), pitched fingers-down by the clamp's pitch; level for the
-        // support.
-        const double       pitch = clamp ? scoop_clamp_pitch_rad_ : 0.0;
-        const tf2::Vector3 fx    = heading * std::cos(pitch) - up * std::sin(pitch);
-        const tf2::Vector3 fy    = heading * std::sin(pitch) + up * std::cos(pitch);
-        const tf2::Vector3 fz    = fx.cross(fy);
-        const tf2::Matrix3x3
-                        rot(fx.x(), fy.x(), fz.x(), fx.y(), fy.y(), fz.y(), fx.z(), fy.z(), fz.z());
+        // fingers, y out of the palm), level.
+        const tf2::Vector3   across = heading.cross(up);
+        const tf2::Matrix3x3 rot(
+            heading.x(),
+            up.x(),
+            across.x(),
+            heading.y(),
+            up.y(),
+            across.y(),
+            heading.z(),
+            up.z(),
+            across.z());
         tf2::Quaternion sq;
         rot.getRotation(sq);
         geometry_msgs::msg::Pose hand_at;
-        hand_at.position.x                         = at.x();
-        hand_at.position.y                         = at.y();
-        hand_at.position.z                         = at.z();
-        hand_at.orientation                        = tf2::toMsg(sq);
-        const geometry_msgs::msg::Pose on_part     = handGoalFromGrasp(hand_at, support.is_left);
-        geometry_msgs::msg::Pose       both_lifted = lifted;
-        both_lifted.position.z += scoop_support_lift_m_;
-        geometry_msgs::msg::Pose support_lifted = on_part;
-        support_lifted.position.z += scoop_support_lift_m_;
+        hand_at.position.x  = under.x();
+        hand_at.position.y  = under.y();
+        hand_at.position.z  = under.z();
+        hand_at.orientation = tf2::toMsg(sq);
+        const geometry_msgs::msg::Pose on_part =
+            clamp ? cp.at : handGoalFromGrasp(hand_at, support.is_left);
+        const geometry_msgs::msg::Pose both_lifted    = raised(lifted, up, scoop_support_lift_m_);
+        const geometry_msgs::msg::Pose support_lifted = raised(on_part, up, scoop_support_lift_m_);
 
         bool held2    = false;
         bool touching = false;
@@ -1849,11 +2439,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         {
             // In front of the edge's other half, at its height, fingers aimed at it; in along
             // them, close, lift together. That start is low over the table, inside its voxels,
-            // so the plan goes to a point scoop_clamp_pre_back_m further back and
-            // scoop_clamp_pre_up_m higher, and the hand comes down from there exempt.
-            const geometry_msgs::msg::Pose in_front = slideBack(on_part, scoop_slide_m_);
-            geometry_msgs::msg::Pose       pre      = slideBack(in_front, scoop_clamp_pre_back_m_);
-            pre.position.z += scoop_clamp_pre_up_m_;
+            // so the plan goes to the approach point the candidate check found reachable (back
+            // and up from it), and the hand comes down from there exempt.
+            const geometry_msgs::msg::Pose& in_front = cp.in_front;
+            const geometry_msgs::msg::Pose& pre      = cp.pre;
             bool there =
                 support_arm && support_hand && moveToNamed(*support_hand, "scoop_open") &&
                 moveTo(*support_arm, pre, support.grasp_frame, "clamp: back from the edge");
@@ -1887,11 +2476,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         }
         else
         {
-            geometry_msgs::msg::Pose below = on_part;
-            below.position.z -= scoop_support_drop_m_;
-            geometry_msgs::msg::Pose in_front = below;
-            in_front.position.x -= heading.x() * scoop_support_back_m_;
-            in_front.position.y -= heading.y() * scoop_support_back_m_;
+            const geometry_msgs::msg::Pose below    = raised(on_part, up, -scoop_support_drop_m_);
+            const geometry_msgs::msg::Pose in_front = slideBack(below, scoop_support_back_m_, up);
             if (support_arm && support_hand && moveToNamed(*support_hand, "open") &&
                 moveTo(*support_arm, in_front, support.grasp_frame, "support: in front of the part"))
             {
@@ -1943,7 +2529,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     }
                     moveLinear(
                         *support_arm,
-                        slideBack(now, scoop_slide_m_),
+                        slideBack(now, scoop_slide_m_, up_),
                         support.grasp_frame,
                         "clamp: back out");
                 }
@@ -1954,7 +2540,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     moveLinear(*support_arm, down, support.grasp_frame, "support: back down");
                     moveLinear(
                         *support_arm,
-                        slideBack(down, scoop_support_back_m_),
+                        slideBack(down, scoop_support_back_m_, up_),
                         support.grasp_frame,
                         "support: back out");
                 }
@@ -2006,6 +2592,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     const auto goal     = goal_handle->get_goal();
     auto       result   = std::make_shared<Place::Result>();
     auto       feedback = std::make_shared<Place::Feedback>();
+    refreshUp();  // a scooped part slides out level with the table, not the pelvis
 
     // What is held, read from the scene rather than remembered, because the attachment is the
     // authority on what the hand actually has. Needed BEFORE the exemption is applied: the
@@ -2278,19 +2865,31 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
 
     feedback->phase = Place::Feedback::PHASE_LOWER;
     goal_handle->publish_feedback(feedback);
-    // Clamped in two hands: down together all the way, the last support_release_height_m on
-    // their own short move so it is near straight down; then the clamping hand opens and slides
-    // out from under the edge while the gripping one still holds the part where it was put, and
-    // goes up. The gripping hand releases as for one hand.
+    // Clamped in two hands: the part is carried sagging -- the clamped end as far below level as
+    // the clamp was placed below the gripping hand (-scoop_clamp_offset z, 5 cm) -- so kept as
+    // held, the clamped end would reach the table that much before the gripped one, and a
+    // set-down at the target would put the clamping hand into the table (no IK for it at all,
+    // in a test). The two come down together to support_release_height_m above where the
+    // clamped end touches, then the gripping hand goes the rest of the way to the target and
+    // the clamping hand only to where it holds the part level: the part pivots down flat onto
+    // the table, far end first. Then the clamping hand opens and slides out from under the edge
+    // while the gripping one still holds the part where it was put, and goes up. The gripping
+    // hand releases as for one hand.
     bool lowered = false;
     if (support_arm && clamped)
     {
         allowHandContact(arm, touchables, true);
         allowHandContact(support, touchables, true);
-        geometry_msgs::msg::Pose near_goal = place_goal;
-        near_goal.position.z += support_release_height_m_;
+        const double                   sag = std::max(0.0, -scoop_clamp_offset_[2]);
+        const geometry_msgs::msg::Pose near_goal =
+            raised(place_goal, up_, support_release_height_m_ + sag);
         if (!moveBothTo(arm, near_goal, support, support_at(near_goal), "lower in two hands") ||
-            !moveBothTo(arm, place_goal, support, support_at(place_goal), "set down in two hands"))
+            !moveBothTo(
+                arm,
+                place_goal,
+                support,
+                raised(support_at(place_goal), up_, sag),
+                "set down in two hands, level"))
         {
             fail(Place::Feedback::PHASE_LOWER, "could not lower the part in two hands");
             return;
@@ -2298,7 +2897,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         lowered                              = true;
         MoveGroup*                     shand = groupFor(support.hand_group);
         const geometry_msgs::msg::Pose now = support_arm->getCurrentPose(support.grasp_frame).pose;
-        geometry_msgs::msg::Pose       out = slideBack(now, scoop_slide_m_);
+        geometry_msgs::msg::Pose       out   = slideBack(now, scoop_slide_m_, up_);
         if (!shand || !moveToNamed(*shand, "scoop_open") ||
             !moveLinear(*support_arm, out, support.grasp_frame, "clamp: slide out"))
         {
@@ -2343,7 +2942,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         const geometry_msgs::msg::Pose now  = support_arm->getCurrentPose(support.grasp_frame).pose;
         geometry_msgs::msg::Pose       down = now;
         down.position.z -= 0.01;
-        const geometry_msgs::msg::Pose out = slideBack(down, scoop_support_back_m_ + 0.05);
+        const geometry_msgs::msg::Pose out = slideBack(down, scoop_support_back_m_ + 0.05, up_);
         if (!moveLinear(*support_arm, down, support.grasp_frame, "support: off the part") ||
             !moveLinear(*support_arm, out, support.grasp_frame, "support: out from under the part"))
         {
@@ -2382,13 +2981,38 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // arm through a volume the object is still occupying.
     //
     // What is held is read from the scene rather than remembered from the pick, so a place
-    // still works against a server that did not do the picking.
-    const moveit::core::RobotStatePtr              state = arm_group->getCurrentState();
-    std::vector<const moveit::core::AttachedBody*> attached;
-    state->getAttachedBodies(attached, state->getJointModelGroup(arm.arm_group));
-    for (const moveit::core::AttachedBody* body : attached)
+    // still works against a server that did not do the picking -- from move_group's planning
+    // scene, synchronously: MoveGroupInterface's own current state carries no attached bodies
+    // (it is joint states only), and its detachObject() is a fire-and-forget topic. With that,
+    // nothing was detached at all, and a part set down in two hands stayed on the gripping hand
+    // and was dragged into the other hand's fingers as the hand slid out.
+    std::vector<std::string> detached;
+    for (const auto& [id, body] : planning_scene_.getAttachedObjects())
     {
-        arm_group->detachObject(body->getName());
+        if (body.link_name != arm.palm_link && id != held_id)
+        {
+            continue;
+        }
+        moveit_msgs::msg::AttachedCollisionObject detach;
+        detach.link_name        = body.link_name;
+        detach.object.id        = id;
+        detach.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+        planning_scene_.applyAttachedCollisionObject(detach);
+        detached.push_back(id);
+    }
+    // A scooped part is set down ON the hand's fingers, and its box -- the detection's bounding
+    // box, reaching back toward the robot -- is then a world object the forearm slides out
+    // through. Taken out of the scene, as the pick does before its approach; the tracker sees
+    // the part again where it now lies.
+    if (scooped)
+    {
+        for (const std::string& id : detached)
+        {
+            moveit_msgs::msg::CollisionObject remove;
+            remove.id        = id;
+            remove.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+            planning_scene_.applyCollisionObject(remove);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(held_mutex_);
@@ -2409,7 +3033,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // and goes up from there.
     if (scooped)
     {
-        const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_);
+        const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_, up_);
         if (!moveLinear(*arm_group, out, arm.grasp_frame, "slide out"))
         {
             fail(Place::Feedback::PHASE_RETREAT, "could not slide the hand out from under the part");

@@ -126,10 +126,18 @@ result:
     roll 0.6 degrees, sag ~5.5, a carry moved it 3 mm; a 2 N push down at the panel's end moved
     it 5.6 mm / 4 degrees and it came back to 3 mm / 2.6, a 5 N push up 22 mm / 15 back to
     5 mm / 3. It held for three stances and the clamp pose off by 1-2 cm. A place lowers both
-    hands together (straight in joint space: walk to the target first, keep the carry short) to
-    `support_release_height_m` (0.025) above the target and then onto it, opens the clamping
-    hand and slides it out along its fingers while the gripping one still holds the part, lifts
-    it `scoop_hover_m`, then releases the gripping hand as for one hand.
+    hands together (straight in joint space: walk to the target first, keep the carry short).
+    The part is carried sagging, its clamped end 5 cm (the clamp's z offset) below level, so the
+    two come down as held to `support_release_height_m` (0.025) above where that end touches;
+    then the gripping hand goes on to the target and the clamping hand only to where it holds the
+    part level, and the part pivots down flat, far end first. The clamping hand then opens and
+    slides out along its fingers while the gripping one still holds the part, rises
+    `scoop_hover_m`, and the gripping hand releases as for one hand. The held part is detached
+    and taken out of the planning scene first, so neither hand drags it, nor its box, on the way
+    out. In MuJoCo, picked, carried and set back down at the spot it came from, the panel lay
+    flat (0.03 degrees) 8-12 mm from where it started, and 15-20 mm (1.1 degrees) with both hands
+    turned 10 degrees: it shifts in the fingers on the way. For a placement finer than that, its
+    pose in the hands has to be measured before it goes down.
   - `support`: a flat hand, palm up, under the other half. It plans to a point
     `scoop_support_back_m` (0.12) in front of and `scoop_support_drop_m` (0.08) below its pose
     (`scoop_support_offset`, -0.02, 0.314, 0.017 m, the same axes; 1.7 cm above the levelled
@@ -139,23 +147,55 @@ result:
     supporting hand down 1 cm and out, and sets the part down with the gripping hand alone.
   - `none`: one hand only.
 
-  If the second hand fails the part stays in the one hand and the result says so. The clamping
-  hand is planned to a point `scoop_clamp_pre_back_m` (0.12) further back and
-  `scoop_clamp_pre_up_m` (0.06) higher than its start -- the start is low over the table, inside
-  its voxels -- and comes down to it on a straight line. Measured that way in MuJoCo (the
-  `conveyor_flat` panels, windows closed, lift 0.20 as configured): sag 5.1-5.4 degrees, roll 3,
-  a 5 N push up at the far end 30 mm, back to 7 mm; the same with the robot turned 5 degrees.
+  If the second hand fails the part stays in the one hand and the result says so.
 
-  **Where to stand.** `scripts/panel_stance.py` (`ros2 run g1_manipulation panel_stance.py
-  --object panel_1`) tucks both arms beside the hips (shoulder pitch 0.3, roll 0.2 outward,
-  elbow 1.2: out of the table's way and of the lifting hand's), then walks the base, closed loop
-  on the panel's pose from `/objects`, until the panel's origin is 0.395 m ahead of
-  `base_footprint` and centred on it, its long axis across the robot (1.5 cm, 3 degrees; the
-  clamp held 2-3 cm and 5 degrees off). That is the stance the scoop and the clamp were measured
-  from: the pelvis 20 cm back from the table's edge, square to the panel and centred on its
-  length. It drives `/cmd_vel_approach`, the gait shaper's priority input, so it needs
-  `nav:=true`; `--check` only reports the offset, `--arms-only` / `--no-arms` do half. Then pick
-  with `arm: right`.
+  **Level with the world.** Every scoop pose is built against the world's vertical (TF from
+  `gravity_frame`, `odom`, to the pelvis), not the pelvis's own z: the pelvis leans as the robot
+  balances a reaching arm. The hand keeps the published grasp's point and heading but is always
+  pitched `scoop_pitch_deg` (25) below the horizontal, palm up (`levelScoop`), once when the
+  attempt is built and again after the re-aim, because a panel the tracker sees a few degrees
+  tilted would otherwise tip the hand with it. The slide, the hover and the lift run level /
+  vertical in the world. Down at the table, before the slide, the hand's real pitch is read back
+  from TF; more than `scoop_pitch_tolerance_deg` (8) flatter than planned stops the pick (the
+  hand backs out): a flat hand's base -- the white RH56E2 mount under the wrist, which sits 7 cm
+  above the table when the hand is pitched as planned -- meets the table's edge and stops the
+  slide. The planner cannot see that itself, since the whole hand is exempt from collisions with
+  the table for the scoop.
+
+  **Where the robot stands.** Before committing, both hands' whole paths are checked with IK
+  (`scoop_variant_ik_timeout_s`, 0.1 s per pose): the gripping hand's pregrasp, start, grasp,
+  lift and two-hand lift, and the clamping hand's clamp, lift, start and approach point. If they
+  are not all reachable as published, the gripping hand is tried turned about the vertical
+  (`scoop_turns_deg`: 0, 10, 20 -- counter-clockwise seen from above for the right hand,
+  mirrored for the left), the clamping hand turned too (`scoop_clamp_turns_deg`: 0, 10, 20), and the clamping hand's approach point from either of `scoop_clamp_approaches` ((back,
+  up): (0.12, 0.06), (0, 0.08)). The clamp is placed relative to the part's edge, whatever the
+  gripping hand's turn. The first combination both hands reach is taken; if only the gripping
+  hand reaches, the part is picked in one hand and the result says why. The log line per
+  combination says which pose was out of reach. Only turns that held in MuJoCo are listed: the
+  right hand turned clockwise grips the edge so that the panel twists and the clamp misses it
+  (sag 13-15 degrees, a 5 N push knocked it out), the clamping hand turned clockwise left the
+  panel rolled 11 degrees, and shifting the grip along the edge changes
+  where the panel hangs from and so its sag (22 degrees one way, -11 the other at 6 cm), so
+  neither is tried. With these, the two-hand scoop of `conveyor_flat`'s first panel is reachable
+  from 112 of 420 stances on a grid (pelvis 0.27-0.47 m behind the grasp, +-20 cm sideways,
+  +-20 degrees), against 38 of 315 as published (IK only; the scan's grid used both turn sets
+  with -10 for the clamp). In MuJoCo every turned combination tried held: sag 3.5-6 degrees,
+  a 5 N push up at the far end 27-35 mm, back to 2-7 mm; a carry 10 cm sideways and back moved
+  the panel in the hands 1-15 mm (3-9 as published). When no combination is reachable the failure says where to step:
+  `scoop_stance_aim` (0.42, -0.14) is where the right hand's scoop point is best seen from in
+  the pelvis frame, the middle of those stances.
+
+  Checked against move_group itself (KDL, the real URDF and SRDF, `/objects` with the panel at
+  its `conveyor_flat` pose, the trajectories played back instantly, no physics): of 10 stances
+  drawn from the grid, the 8 the scan found reachable picked in two hands and the 2 it did not
+  fell back to one; pick then place went through end to end; a pelvis tipped 12 degrees back
+  after the descent was caught at the table, re-levelled, and the pick went on in two hands.
+
+  `scripts/panel_stance.py` (`ros2 run g1_manipulation panel_stance.py --object panel_1`) can
+  still walk the base there: it tucks both arms beside the hips, then walks, closed loop on the
+  panel's pose from `/objects`, until the panel's origin is 0.395 m ahead of `base_footprint`
+  and centred on it. It drives `/cmd_vel_approach` (needs `nav:=true`); `--check` only reports
+  the offset.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the
