@@ -44,6 +44,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -114,9 +115,14 @@ class GoToStance(Node):
         return None
 
     def stop(self):
+        # Ctrl-C included: rclpy's own SIGINT handler is off (main), so the context is still
+        # valid here and the zero command goes out rather than the last step command lingering.
         for _ in range(5):
-            self.cmd.publish(Twist())
-            self.spin_for(0.02)
+            try:
+                self.cmd.publish(Twist())
+            except Exception:  # noqa: BLE001  (context already gone: nothing left to stop)
+                return
+            time.sleep(0.02)
 
     def errors(self, p, target):
         """Distance, and forward / left / turn errors in the robot's frame."""
@@ -237,7 +243,9 @@ def main():
             )
         return
 
-    rclpy.init()
+    # No rclpy SIGINT handler: Ctrl-C raises KeyboardInterrupt with the context still up, so
+    # stop() can still command zero velocity.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     n = GoToStance(a)
     ok = True
     try:

@@ -41,17 +41,17 @@ import sys
 import time
 
 import rclpy
+import tf2_geometry_msgs  # noqa: F401  (registers PoseStamped with tf2)
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 from trajectory_msgs.msg import JointTrajectoryPoint
 from vision_msgs.msg import Detection3DArray
-
-import tf2_geometry_msgs  # noqa: F401  (registers PoseStamped with tf2)
 
 ARM_JOINTS = [
     f"{side}_{j}_joint"
@@ -118,7 +118,9 @@ class PanelStance(Node):
             try:
                 p = self.tf.transform(ps, self.a.base_frame)
             except TransformException as e:
-                self.get_logger().warn(f"cannot transform the panel pose: {e}", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    f"cannot transform the panel pose: {e}", throttle_duration_sec=2.0
+                )
                 return
             m = (p.pose.position.x, p.pose.position.y, yaw_of(p.pose.orientation))
             if self.latest is None or time.monotonic() - self.stamp > 1.0:
@@ -157,7 +159,9 @@ class PanelStance(Node):
         pt = JointTrajectoryPoint()
         pt.positions = TUCKED
         pt.velocities = [0.0] * len(TUCKED)
-        pt.time_from_start = Duration(sec=int(self.a.arm_time), nanosec=int((self.a.arm_time % 1) * 1e9))
+        pt.time_from_start = Duration(
+            sec=int(self.a.arm_time), nanosec=int((self.a.arm_time % 1) * 1e9)
+        )
         goal.trajectory.points = [pt]
         self.get_logger().info(f"arms: tucking in {self.a.arm_time:.0f} s")
         fut = self.arm.send_goal_async(goal)
@@ -177,9 +181,14 @@ class PanelStance(Node):
 
     # ---- base -------------------------------------------------------------------------------
     def stop(self):
+        # Ctrl-C included: rclpy's own SIGINT handler is off (main), so the context is still
+        # valid here and the zero command goes out rather than the last step command lingering.
         for _ in range(5):
-            self.cmd.publish(Twist())
-            self.spin_for(0.02)
+            try:
+                self.cmd.publish(Twist())
+            except Exception:  # noqa: BLE001  (context already gone: nothing left to stop)
+                return
+            time.sleep(0.02)
 
     def report(self, e, prefix=""):
         ex, ey, ea = e
@@ -219,7 +228,9 @@ class PanelStance(Node):
             e = self.errors()
             if e is None:
                 self.stop()
-                self.get_logger().warn("lost the panel; standing until it is seen again", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    "lost the panel; standing until it is seen again", throttle_duration_sec=2.0
+                )
                 continue
             ex, ey, ea = e
             t = Twist()
@@ -244,8 +255,12 @@ class PanelStance(Node):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--object", default="panel_1", help="tracked panel to stand at (default panel_1)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--object", default="panel_1", help="tracked panel to stand at (default panel_1)"
+    )
     p.add_argument("--x", type=float, default=0.395, help="panel origin ahead of base_footprint, m")
     p.add_argument("--y", type=float, default=0.000, help="panel origin left of base_footprint, m")
     p.add_argument("--tol", type=float, default=0.015, help="position tolerance, m")
@@ -263,7 +278,9 @@ def main():
     p.add_argument("--check", action="store_true", help="only report the current offset")
     a = p.parse_args()
 
-    rclpy.init()
+    # No rclpy SIGINT handler: Ctrl-C raises KeyboardInterrupt with the context still up, so
+    # stop() can still command zero velocity.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     n = PanelStance(a)
     ok = True
     try:
@@ -276,7 +293,11 @@ def main():
                 n.spin_for(1.0)  # let the filter settle
                 e = n.errors() or e
                 n.report(e)
-                ok = abs(e[0]) <= a.tol and abs(e[1]) <= a.tol and abs(e[2]) <= math.radians(a.tol_yaw_deg)
+                ok = (
+                    abs(e[0]) <= a.tol
+                    and abs(e[1]) <= a.tol
+                    and abs(e[2]) <= math.radians(a.tol_yaw_deg)
+                )
                 n.get_logger().info("inside tolerance" if ok else "OUTSIDE tolerance")
         else:
             if not a.no_arms:

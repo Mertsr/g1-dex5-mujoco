@@ -344,7 +344,7 @@ private:
     std::vector<double> scoop_clamp_pre_m_{ 0.12, 0.06, 0.0, 0.08 };
     /// The best stance for the two-hand scoop, as where the right hand's scoop point should be
     /// in the pelvis frame (x ahead, y left): told to the user when nothing is reachable.
-    std::vector<double> scoop_stance_aim_{ 0.42, -0.14 };
+    std::vector<double> scoop_stance_aim_{ 0.46, -0.16 };
     double              scoop_variant_ik_timeout_s_{ 0.1 };
 
     /// The clamping hand's poses for a scoop whose gripping hand is lifted to `lifted`, having

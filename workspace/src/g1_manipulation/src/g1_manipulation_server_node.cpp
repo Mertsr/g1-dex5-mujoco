@@ -441,7 +441,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // left): the middle of the stances it works from. Only for telling the user where to stand.
     scoop_stance_aim_ = declare_parameter<std::vector<double>>(
         "scoop_stance_aim",
-        std::vector<double>{ 0.42, -0.14 });
+        std::vector<double>{ 0.46, -0.16 });
     if (scoop_clamp_pre_m_.empty() || scoop_clamp_pre_m_.size() % 2 != 0 ||
         scoop_turns_rad_.empty() || scoop_clamp_turns_rad_.empty() || scoop_stance_aim_.size() != 2)
     {
@@ -1996,7 +1996,11 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                                                                "open";
             closed_shape                 = own_closed.empty() ? "closed" : own_closed;
         }
-        if (!moveToNamed(*hand_group, open_shape))
+        // Straight open for the way there, the grasp's own shape at the pregrasp: a scoop's
+        // shape swings the thumb 1.2 rad across, and with the arm tucked beside the hip
+        // (ready_arms.py) that puts the thumb into the hip -- every plan to it failed, "would
+        // not open".
+        if (!moveToNamed(*hand_group, "open"))
         {
             fail(Pick::Feedback::PHASE_PREGRASP, "the " + arm_name + " hand would not open");
             return;
@@ -2013,6 +2017,13 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         RCLCPP_WARN(get_logger(), "pick %s: %s with the %s hand is reachable but the plan was blocked",
                     object_id.c_str(), at.label.c_str(), arm_name.c_str());
         tried += (tried.empty() ? "" : "; ") + at.label + " (" + arm_name + ")";
+    }
+    if (reached && open_shape != "open" && !moveToNamed(*hand_group, open_shape))
+    {
+        fail(
+            Pick::Feedback::PHASE_PREGRASP,
+            "the " + arm_name + " hand would not take '" + open_shape + "' at the pregrasp");
+        return;
     }
     if (!reached)
     {
@@ -2443,8 +2454,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             // and up from it), and the hand comes down from there exempt.
             const geometry_msgs::msg::Pose& in_front = cp.in_front;
             const geometry_msgs::msg::Pose& pre      = cp.pre;
+            // Straight open on the way (the clamp's shape, thumb across, would hit the hip it
+            // starts beside), the clamp's shape at the approach point.
             bool there =
-                support_arm && support_hand && moveToNamed(*support_hand, "scoop_open") &&
+                support_arm && support_hand && moveToNamed(*support_hand, "open") &&
                 moveTo(*support_arm, pre, support.grasp_frame, "clamp: back from the edge");
             if (!there && support_arm && support_hand)
             {
@@ -2455,6 +2468,14 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     pre,
                     support.grasp_frame,
                     "clamp: back from the edge, exempt");
+            }
+            if (there && !moveToNamed(*support_hand, "scoop_open"))
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "pick %s: the clamping hand would not take scoop_open",
+                    object_id.c_str());
+                there = false;
             }
             if (there)
             {

@@ -102,8 +102,10 @@ result:
   A grasp with a `scoop` part in its name (`scoop_right_near`, the BSH panel in
   `object_tracker_conveyor_flat.yaml`) takes a flat part lying on a table from UNDER its edge,
   palm up, the way a waiter takes a plate. Tried exactly as published, by the hand its name says,
-  only if its fingers point away from the robot (`side_grasp_min_forward`). The hand opens to
-  `<grasp>_open` (`scoop_open`), goes to a pregrasp `scoop_hover_m` (0.08) above the start, comes
+  only if its fingers point away from the robot (`side_grasp_min_forward`). The hand opens
+  straight (`open`), goes to a pregrasp `scoop_hover_m` (0.08) above the start, takes
+  `<grasp>_open` (`scoop_open`) there -- not before: that shape swings the thumb 1.2 rad across,
+  and with the arm tucked beside the hip it went into the hip and no plan to it existed -- comes
   straight down to the start -- `scoop_slide_m` (0.11) back from the grasp along the fingers'
   level heading, at the grasp's height, i.e. on the table in front of the edge -- slides in under
   the edge on a Cartesian path, closes to `<grasp>_closed` (`scoop_closed`: fingers up against the
@@ -115,8 +117,8 @@ result:
   the fingers' 1 Nm cannot hold it level). With `scoop_two_hand` (on) the OTHER hand then takes
   its other half too, in the way `scoop_second_hand` names:
 
-  - `clamp` (default): a second scoop, in the air. The hand opens to `scoop_open`, plans to a
-    point `scoop_slide_m` in front of its clamp pose, slides in along its fingers under the edge,
+  - `clamp` (default): a second scoop, in the air. The hand opens straight, plans to a
+    point back and up from its clamp pose, takes `scoop_open` there, slides in along its fingers under the edge,
     closes to `scoop_closed` (fingers under, thumb on top), and the two arms lift
     `scoop_support_lift_m` (0.05) more together as one `both_arms` trajectory. The clamp pose is
     `scoop_clamp_offset` (0.002, 0.352, -0.050 m) from the gripping hand's lifted grasp frame --
@@ -206,10 +208,13 @@ result:
 
   `go_to_stance.py NAME` walks base_footprint, closed loop on TF, to a fixed pose from
   `config/stances.yaml` (or `~/.ros/g1_stances.yaml`): no perception, since the head camera
-  does not see the panels from a metre or two away. `panel_1` is (1.12, -0.78) facing +x in
-  odom -- in the simulator with `odometry:=sportmodestate` odom is the MuJoCo world -- the
-  middle of the stances the two-hand scoop of the first panel works from, so arriving a few
-  centimetres or degrees off (it stops inside 2 cm and 3 degrees) changes nothing. Further than
+  does not see the panels from a metre or two away. `panel_1` is (1.08, -0.80) facing 5 degrees
+  left of +x in odom -- in the simulator with `odometry:=sportmodestate` odom is the MuJoCo world.
+  Chosen against move_group with the full collision model (the real meshes): over a grid of 100
+  stances the pick went through in two hands every time with the pelvis 0.47 m behind the grasp
+  and facing 0 to +10 degrees, anywhere from y -0.90 to -0.70; 4 cm nearer the arm folds into
+  the torso at the scoop's start and the pick was hit and miss. Seven picks from it and from up
+  to 2 cm / 4 degrees off it all went through in two hands. It stops inside 2 cm and 3 degrees. Further than
   1 m it turns to the stance and walks there, nearer it moves forward, sideways and turns at
   once; straight, with no obstacle avoidance, through `/cmd_vel_approach` (needs `nav:=true`).
   `--save NAME` records where the robot stands now as a stance (a place to put the panel down,

@@ -6,7 +6,9 @@
 # are world coordinates of the scene.
 stances:
   # conveyor_flat, the first panel (part_tray_1 at rest at 1.595, -0.800, its edge grasp at
-  # 1.55, -0.915): the middle of the stances the two-hand scoop works from in MuJoCo (pelvis
-  # 0.31-0.47 m behind the right hand's scoop point, -0.15..+0.20 m sideways of the measured
-  # stance, +-20 degrees), 28 cm back from the table's edge, square to it.
-  panel_1: {x: 1.12, y: -0.78, yaw_deg: 0.0, frame: odom}
+  # 1.55, -0.915): checked against move_group with the full collision model (KDL, the real
+  # meshes) over a grid of stances, the band where the pick went through in two hands every time
+  # is the pelvis 0.47 m behind the grasp, facing 0 to +10 degrees, anywhere from y -0.90 to -0.70.
+  # Its middle: 32 cm back from the table's edge. 4 cm nearer or further back it was hit and miss
+  # (the arm folds into the torso at the scoop's start nearer; out of reach further).
+  panel_1: {x: 1.08, y: -0.80, yaw_deg: 5.0, frame: odom}
