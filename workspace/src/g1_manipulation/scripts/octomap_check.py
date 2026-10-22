@@ -241,13 +241,47 @@ def main():
                            f"resolution {resolution} m")
         if not sensors:
             first_fail = first_fail or "move_group has no sensors configured"
+    # Is move_group subscribed to the clouds at all, and can its subscription hear the publisher?
+    # Nothing in the filtered clouds with the input publishing means one of: the updater plugin
+    # never started (no subscription), a QoS pair that cannot match (a RELIABLE subscriber does
+    # not hear a BEST_EFFORT publisher), or clouds that arrive and are dropped later.
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        import xml.etree.ElementTree as ET
+        share = get_package_share_directory("moveit_ros_perception")
+        version = ET.parse(share + "/package.xml").getroot().findtext("version")
+        say(True, f"moveit_ros_perception {version} installed (the PointCloudOctomapUpdater plugin)")
+    except Exception as e:  # noqa: BLE001
+        say(False, f"moveit_ros_perception is not installed ({type(e).__name__}): move_group cannot load "
+                   "the octomap updater -- sudo apt install ros-humble-moveit-ros-perception")
+        first_fail = first_fail or "moveit_ros_perception (the octomap updater plugin) is missing"
+    for topic in CLOUDS:
+        subs = [i for i in node.get_subscriptions_info_by_topic(topic) if i.node_name == "move_group"]
+        pubs = node.get_publishers_info_by_topic(topic)
+        pub_rel = sorted({p.qos_profile.reliability.name for p in pubs})
+        if not subs:
+            say(False, f"{topic}: move_group is NOT subscribed (publishers: "
+                       f"{[p.node_name for p in pubs]}) -- its updater for this sensor never started; "
+                       "move_group's log at startup says why (search it for 'octomap' / 'updater')")
+            first_fail = first_fail or f"move_group has no subscription on {topic}"
+            continue
+        sub_rel = subs[0].qos_profile.reliability.name
+        mismatch = sub_rel == "RELIABLE" and "BEST_EFFORT" in pub_rel
+        say(not mismatch, f"{topic}: move_group subscribed {sub_rel}, published {pub_rel} by "
+                          f"{[p.node_name for p in pubs]}"
+                          + (" -- a RELIABLE subscriber never hears a BEST_EFFORT publisher" if mismatch else ""))
+        if mismatch:
+            first_fail = first_fail or f"QoS mismatch on {topic}"
     for topic, what in FILTERED.items():
         s = node.stats[topic]
         if s["n"] == 0:
             source = list(CLOUDS)[list(FILTERED).index(topic)]
             say(False, f"{topic} ({what}): nothing -- move_group is not taking that cloud in")
             if node.stats[source]["n"] > 0:
-                first_fail = first_fail or f"move_group receives nothing from {source}, which IS publishing"
+                first_fail = first_fail or (
+                    f"move_group is subscribed to {source}, which IS publishing, yet maps nothing: the "
+                    "clouds are dropped inside move_group (its TF message filter, or the self-filter's "
+                    "transform cache) -- its log says 'Transform error' or 'Transform cache'")
         else:
             m = s["last"]
             say(m.width * m.height > 0, f"{topic}: {s['n'] / args.seconds:.1f} Hz, {m.width * m.height} "

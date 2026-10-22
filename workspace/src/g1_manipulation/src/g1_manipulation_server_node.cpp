@@ -358,6 +358,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     scoop_surface_below_grasp_m_ = declare_parameter<double>("scoop_surface_below_grasp_m", 0.095);
     scoop_surface_margin_m_      = declare_parameter<double>("scoop_surface_margin_m", 0.02);
     scoop_surface_front_m_       = declare_parameter<double>("scoop_surface_front_m", 0.12);
+    scoop_surface_thickness_m_   = declare_parameter<double>("scoop_surface_thickness_m", 0.05);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
@@ -1156,7 +1157,7 @@ std::string G1ManipulationServer::addSurfaceSlab(
     }
     heading.normalize();
     const tf2::Vector3 side      = up_.cross(heading);
-    const double       thickness = 0.05;
+    const double       thickness = scoop_surface_thickness_m_;
     const double       back = scoop_surface_front_m_, ahead = 0.6;
     // The slab's middle: along the heading halfway between its near and far edges, and its
     // thickness below its top.

@@ -333,6 +333,7 @@ private:
     double scoop_surface_below_grasp_m_{ 0.095 };
     double scoop_surface_margin_m_{ 0.02 };
     double scoop_surface_front_m_{ 0.12 };
+    double scoop_surface_thickness_m_{ 0.05 };
     /// Clears the octomap and waits `wait_s` for the sensors to refill it.
     void refreshOctomap(double wait_s);
     /// The table under a scooped part as a collision box (see scoop_surface_*); its id, or empty.
