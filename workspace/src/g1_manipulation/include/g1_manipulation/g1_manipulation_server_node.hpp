@@ -334,11 +334,14 @@ private:
     double scoop_surface_margin_m_{ 0.02 };
     double scoop_surface_front_m_{ 0.12 };
     double scoop_surface_thickness_m_{ 0.05 };
+    bool   scoop_table_box_{ false };
     /// Clears the octomap and waits `wait_s` for the sensors to refill it.
     void refreshOctomap(double wait_s);
     /// The table under a scooped part as a collision box (see scoop_surface_*); its id, or empty.
     std::string addSurfaceSlab(const std::string& object_id, const geometry_msgs::msg::Pose& grasp);
     void        removeSurfaceSlab(const std::string& id);
+    /// Removes every world collision object left over from earlier picks; returns how many.
+    std::size_t clearStaleWorldObjects();
     std::string  gravity_frame_{ "odom" };
     tf2::Vector3 up_{ 0.0, 0.0, 1.0 };
     void         refreshUp();

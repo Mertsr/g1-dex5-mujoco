@@ -359,6 +359,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     scoop_surface_margin_m_      = declare_parameter<double>("scoop_surface_margin_m", 0.02);
     scoop_surface_front_m_       = declare_parameter<double>("scoop_surface_front_m", 0.12);
     scoop_surface_thickness_m_   = declare_parameter<double>("scoop_surface_thickness_m", 0.05);
+    // Whether the box is added at all. Off: with the octomap working the table is in it, from
+    // the very pick that clears and refills it, and the box only duplicated it -- it was added
+    // when the octomap was silently empty (moveit_ros_perception was not installed).
+    scoop_table_box_             = declare_parameter<bool>("scoop_table_box", false);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
@@ -1203,6 +1207,29 @@ std::string G1ManipulationServer::addSurfaceSlab(
     return slab.id;
 }
 
+std::size_t G1ManipulationServer::clearStaleWorldObjects()
+{
+    // A world object stays where it was put, in the planning frame -- the pelvis -- so a part's
+    // box left behind by an earlier pick that stopped before attaching it walks along with the
+    // robot afterwards and stands where no part is: a "ghost" panel, solid to the planner,
+    // blocking hands that reach past it. Nothing else in this stack adds world objects, and every
+    // pick re-adds what it needs from the current detection, so all of them go. Attached
+    // objects (a part still in a hand) are not world objects and are not touched.
+    const std::vector<std::string> names = planning_scene_.getKnownObjectNames();
+    if (!names.empty())
+    {
+        planning_scene_.removeCollisionObjects(names);
+        std::string list;
+        for (const std::string& n : names)
+        {
+            list += (list.empty() ? "" : ", ") + n;
+        }
+        RCLCPP_INFO(get_logger(), "removed %zu stale world object(s) from the scene: %s", names.size(),
+                    list.c_str());
+    }
+    return names.size();
+}
+
 void G1ManipulationServer::removeSurfaceSlab(const std::string& id)
 {
     if (id.empty())
@@ -1432,6 +1459,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         candidates.push_back({ r.hypothesis.class_id, pose });
     }
     refreshUp();
+    clearStaleWorldObjects();
     refreshOctomap(pick_octomap_refill_s_);
 
     // The table under a scooped part, as a box (see scoop_surface_*): taken from the first
@@ -1439,7 +1467,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::string surface_id;
     for (const Candidate& c : candidates)
     {
-        if (c.pose && isScoopGrasp(graspNameOf(c.name)))
+        if (scoop_table_box_ && c.pose && isScoopGrasp(graspNameOf(c.name)))
         {
             surface_id = addSurfaceSlab(object_id, levelScoop(*c.pose, up_, scoop_pitch_rad_));
             break;
@@ -1505,6 +1533,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         if (arm_group)
         {
             arm_group->detachObject(object_id);
+            // Its box too: left in the world it becomes a ghost the next pick plans around.
+            planning_scene_.removeCollisionObjects({ object_id });
             if (contact_allowed)
             {
                 // Out the way it went in, still allowed to touch: a scoop slides back along its
