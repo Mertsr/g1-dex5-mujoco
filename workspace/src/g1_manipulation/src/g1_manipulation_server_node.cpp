@@ -342,6 +342,21 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // After clearing the octomap to get a stuck arm moving, how long the sensors get to refill
     // it before re-planning (the updaters run at up to 5 Hz).
     octomap_refill_s_    = declare_parameter<double>("octomap_refill_s", 1.0);
+    // The octomap lives in the planning frame, the pelvis, so a robot that walked to the table
+    // (go_to_stance.py) carries every voxel it saw on the way along with it: the table smeared
+    // where it is not, and missing where it is. Every pick therefore starts from a cleared map
+    // and waits this long for the LiDAR and the depth camera to fill it from where it stands.
+    pick_octomap_refill_s_ = declare_parameter<double>("pick_octomap_refill_s", 2.5);
+    // A scoop also puts the table itself into the planning scene, as a box, independently of
+    // the octomap: its top scoop_surface_margin_m below the table (so the fingers on the table
+    // and the part lying on it are clear of it and need no exemption), the table's top taken
+    // scoop_surface_below_grasp_m under the published scoop grasp (measured: the panel's
+    // scoop_right_near grasp frame stands 0.095 m above the table it lies on), reaching
+    // scoop_surface_front_m toward the robot from the grasp (the conveyor_flat table's edge is
+    // 0.15 in front of it) and 0.6 m beyond, 1.2 m wide. Removed when the pick ends.
+    scoop_surface_below_grasp_m_ = declare_parameter<double>("scoop_surface_below_grasp_m", 0.095);
+    scoop_surface_margin_m_      = declare_parameter<double>("scoop_surface_margin_m", 0.02);
+    scoop_surface_front_m_       = declare_parameter<double>("scoop_surface_front_m", 0.12);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
@@ -1103,6 +1118,96 @@ G1ManipulationServer::ClampPoses G1ManipulationServer::clampPoses(
     return out;
 }
 
+void G1ManipulationServer::refreshOctomap(double wait_s)
+{
+    if (!clear_octomap_->wait_for_service(std::chrono::seconds(1)))
+    {
+        RCLCPP_WARN(
+            get_logger(),
+            "/clear_octomap is not there: planning against the octomap as it is");
+        return;
+    }
+    auto future =
+        clear_octomap_->async_send_request(std::make_shared<std_srvs::srv::Empty::Request>());
+    future.wait_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(wait_s * 1000)));
+    RCLCPP_INFO(
+        get_logger(),
+        "octomap cleared and refilled for %.1f s from where the robot stands",
+        wait_s);
+}
+
+std::string G1ManipulationServer::addSurfaceSlab(
+    const std::string& object_id, const geometry_msgs::msg::Pose& grasp)
+{
+    tf2::Quaternion q;
+    tf2::fromMsg(grasp.orientation, q);
+    tf2::Vector3 heading = tf2::Matrix3x3(q).getColumn(0);
+    heading              = heading - up_ * heading.dot(up_);
+    if (heading.length() < 1e-3)
+    {
+        return "";
+    }
+    heading.normalize();
+    const tf2::Vector3 side      = up_.cross(heading);
+    const double       thickness = 0.05;
+    const double       back = scoop_surface_front_m_, ahead = 0.6;
+    // The slab's middle: along the heading halfway between its near and far edges, and its
+    // thickness below its top.
+    const tf2::Vector3 g(grasp.position.x, grasp.position.y, grasp.position.z);
+    const tf2::Vector3 top_at_grasp =
+        g - up_ * (scoop_surface_below_grasp_m_ + scoop_surface_margin_m_);
+    const tf2::Vector3 centre =
+        top_at_grasp + heading * (0.5 * (ahead - back)) - up_ * (0.5 * thickness);
+    const tf2::Matrix3x3 rot(
+        heading.x(),
+        side.x(),
+        up_.x(),
+        heading.y(),
+        side.y(),
+        up_.y(),
+        heading.z(),
+        side.z(),
+        up_.z());
+    tf2::Quaternion rq;
+    rot.getRotation(rq);
+
+    moveit_msgs::msg::CollisionObject slab;
+    slab.id              = object_id + "/surface";
+    slab.header.frame_id = planning_frame_;
+    shape_msgs::msg::SolidPrimitive box;
+    box.type       = shape_msgs::msg::SolidPrimitive::BOX;
+    box.dimensions = { back + ahead, 1.2, thickness };
+    slab.primitives.push_back(box);
+    geometry_msgs::msg::Pose pose;
+    pose.position.x  = centre.x();
+    pose.position.y  = centre.y();
+    pose.position.z  = centre.z();
+    pose.orientation = tf2::toMsg(rq);
+    slab.primitive_poses.push_back(pose);
+    slab.operation = moveit_msgs::msg::CollisionObject::ADD;
+    planning_scene_.applyCollisionObject(slab);
+    RCLCPP_INFO(
+        get_logger(),
+        "pick %s: the table as a box, its top at pelvis z %.3f, from %.2f m in front of the grasp",
+        object_id.c_str(),
+        top_at_grasp.z(),
+        back);
+    return slab.id;
+}
+
+void G1ManipulationServer::removeSurfaceSlab(const std::string& id)
+{
+    if (id.empty())
+    {
+        return;
+    }
+    moveit_msgs::msg::CollisionObject remove;
+    remove.id        = id;
+    remove.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+    planning_scene_.applyCollisionObject(remove);
+}
+
 bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what)
 {
     auto planned = group.plan(plan);
@@ -1320,6 +1425,32 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         candidates.push_back({ r.hypothesis.class_id, pose });
     }
     refreshUp();
+    refreshOctomap(pick_octomap_refill_s_);
+
+    // The table under a scooped part, as a box (see scoop_surface_*): taken from the first
+    // scoop grasp, levelled. Removed again however the pick ends.
+    std::string surface_id;
+    for (const Candidate& c : candidates)
+    {
+        if (c.pose && isScoopGrasp(graspNameOf(c.name)))
+        {
+            surface_id = addSurfaceSlab(object_id, levelScoop(*c.pose, up_, scoop_pitch_rad_));
+            break;
+        }
+    }
+    struct SlabGuard
+    {
+        G1ManipulationServer* self;
+        const std::string*    id;
+        ~SlabGuard() { self->removeSurfaceSlab(*id); }
+    } slab_guard{ this, &surface_id };
+    // What the hand (and the part, once attached) may touch while it is in contact: the octomap,
+    // the part, and the table's box -- the part is lifted off the table it overlaps.
+    std::vector<std::string> held_touch{ "<octomap>", object_id };
+    if (!surface_id.empty())
+    {
+        held_touch.push_back(surface_id);
+    }
 
     // Fingers pointing most AWAY from the robot first: a part's grasps usually come as mirror
     // pairs tipped toward either end of it, and the one leaning away is the one an arm reaching
@@ -1373,7 +1504,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 // fingers and then rises, anything else rises along its approach. Without this
                 // the hand was left pressed into the table with contact checked again, every
                 // later plan started "in collision", and the arm would not move at all.
-                allowHandContact(arm, { "<octomap>", object_id }, true);
+                allowHandContact(arm, held_touch, true);
                 const geometry_msgs::msg::Pose now =
                     arm_group->getCurrentPose(arm.grasp_frame).pose;
                 geometry_msgs::msg::Pose out = now;
@@ -1400,7 +1531,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                         why.c_str());
                 }
             }
-            allowHandContact(arm, { "<octomap>", object_id }, false);
+            allowHandContact(arm, held_touch, false);
         }
         result->success = false;
         result->message = phase + ": " + why;
@@ -2291,7 +2422,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // the octomap from before the grasp -- the ShapeMask stops new clouds re-adding it, but it
     // does not erase what is already there. Without this exemption the lift starts with the
     // attached cube already in collision against the table it is still sitting on.
-    allowHandContact(arm, { "<octomap>", object_id }, true);
+    allowHandContact(arm, held_touch, true);
 
     feedback->phase = Pick::Feedback::PHASE_LIFT;
     goal_handle->publish_feedback(feedback);
@@ -2308,7 +2439,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         return;
     }
 
-    allowHandContact(arm, { "<octomap>", object_id }, false);
+    allowHandContact(arm, held_touch, false);
 
     // A scooped part hangs from one edge and sags; the other hand takes its other half too
     // (scoop_second_hand): "clamp", a second scoop in the air, fingers under the edge and the
@@ -2459,16 +2590,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             bool there =
                 support_arm && support_hand && moveToNamed(*support_hand, "open") &&
                 moveTo(*support_arm, pre, support.grasp_frame, "clamp: back from the edge");
-            if (!there && support_arm && support_hand)
-            {
-                allowHandContact(support, { "<octomap>", object_id }, true);
-                touching = true;
-                there    = moveTo(
-                    *support_arm,
-                    pre,
-                    support.grasp_frame,
-                    "clamp: back from the edge, exempt");
-            }
+            // No fallback that plans with the hand exempt from the octomap: with the hand and
+            // the wrist exempt, the planner routed the arm through the table.
             if (there && !moveToNamed(*support_hand, "scoop_open"))
             {
                 RCLCPP_WARN(
@@ -2479,7 +2602,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             }
             if (there)
             {
-                allowHandContact(support, { "<octomap>", object_id }, true);
+                allowHandContact(support, held_touch, true);
                 touching = true;
                 held2    = moveLinear(
                             *support_arm,
@@ -2502,7 +2625,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             if (support_arm && support_hand && moveToNamed(*support_hand, "open") &&
                 moveTo(*support_arm, in_front, support.grasp_frame, "support: in front of the part"))
             {
-                allowHandContact(support, { "<octomap>", object_id }, true);
+                allowHandContact(support, held_touch, true);
                 touching = moveLinear(
                     *support_arm,
                     below,
@@ -2566,7 +2689,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                         "support: back out");
                 }
             }
-            allowHandContact(support, { "<octomap>", object_id }, false);
+            allowHandContact(support, held_touch, false);
             support_note =
                 "; the " + support_name + " hand could not take the other half, held in one hand";
             support_name.clear();

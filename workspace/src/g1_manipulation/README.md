@@ -193,6 +193,17 @@ result:
   fell back to one; pick then place went through end to end; a pelvis tipped 12 degrees back
   after the descent was caught at the table, re-levelled, and the pick went on in two hands.
 
+  **The table.** Every pick clears the octomap and lets the sensors refill it for
+  `pick_octomap_refill_s` (2.5 s) first: the octomap lives in the pelvis frame, so after the robot
+  walked to the table every voxel it saw on the way had moved with it -- the table smeared where
+  it is not and missing where it is, and the arm was planned through it. A scoop also puts the
+  table into the scene as a box, from the published grasp alone (`scoop_surface_*`: its top
+  0.095 m under the grasp frame, less a 2 cm margin so the fingers on the table and the part on
+  it are clear of it, from 12 cm in front of the grasp to 60 cm beyond), so the transit plans
+  around the table even where the sensors left holes; it is removed when the pick ends. And the
+  clamping hand no longer falls back to a plan with itself exempt from the octomap, which let the
+  planner route it through the table.
+
   **The routine.** Three commands, the same every time; nothing to line up by hand:
 
   ```bash
