@@ -348,8 +348,9 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // and waits this long for the LiDAR and the depth camera to fill it from where it stands.
     pick_octomap_refill_s_ = declare_parameter<double>("pick_octomap_refill_s", 2.5);
     // A scoop also puts the table itself into the planning scene, as a box, independently of
-    // the octomap: its top scoop_surface_margin_m below the table (so the fingers on the table
-    // and the part lying on it are clear of it and need no exemption), the table's top taken
+    // the octomap: its top scoop_surface_margin_m below the table (so the part lying on it
+    // and the hand's collision hulls in their scoop pose -- coarser than the hand itself, and
+    // within 2 cm of the table at the start of the slide -- are clear of it), the table's top taken
     // scoop_surface_below_grasp_m under the published scoop grasp (measured: the panel's
     // scoop_right_near grasp frame stands 0.095 m above the table it lies on), reaching
     // scoop_surface_front_m toward the robot from the grasp (the conveyor_flat table's edge is
@@ -369,10 +370,15 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // this far above it.
     scoop_slide_m_ = declare_parameter<double>("scoop_slide_m", 0.11);
     scoop_hover_m_ = declare_parameter<double>("scoop_hover_m", 0.08);
-    // ... and is aimed this much higher than published: the hand slides in pressed onto the
-    // table otherwise, the moment the arm or the part's height is off downward, and stalls there.
-    // Lifting held from -5 to +5 mm in MuJoCo, so this keeps the error window on the safe side.
-    scoop_raise_m_ = declare_parameter<double>("scoop_raise_m", 0.004);
+    // ... and is aimed this much higher than published. At the published height the hand
+    // slides in 6 mm (fingertips) and 9 mm (palm) above the table -- measured in MuJoCo against
+    // the conveyor_flat panel with the arm exactly on its target -- so a centimetre of arm sag
+    // or of error in the part's estimated height puts the back of the hand on the table, every
+    // time. The panel's near edge stands proud of the table, and the full two-hand pick, carry
+    // and place in MuJoCo behaved the same from +4 mm to +45 mm above the published grasp
+    // (roll, sag and carry within a few tenths, placed within 0.7 deg). 25 mm sits in the
+    // middle: the hand slides in about 3 cm clear of the table, with 2 cm to spare above.
+    scoop_raise_m_ = declare_parameter<double>("scoop_raise_m", 0.025);
     // A scooped part hangs from one edge and sags along its length (a 0.6 m BSH panel: 9-20
     // degrees, the fingers' 1 Nm cannot hold it level). With scoop_two_hand the other hand then
     // comes under it, palm up, and the two lift and carry it together (MuJoCo, sim gains: sag

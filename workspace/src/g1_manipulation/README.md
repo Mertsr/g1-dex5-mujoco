@@ -204,6 +204,27 @@ result:
   clamping hand no longer falls back to a plan with itself exempt from the octomap, which let the
   planner route it through the table.
 
+  What the octomap and the box do NOT cover is the slide itself: from the point in front of the
+  edge to the grasp the hand is exempt from the octomap (the part it slides under is in it), so
+  only geometry keeps it off the table. At the published grasp height the hand slid in 6 mm
+  (fingertips) and 9 mm (palm) above the table -- with the arm exactly on target; a centimetre of
+  arm sag or of error in the part's estimated height put the back of the hand on the table every
+  time. The scoop is now aimed `scoop_raise_m` (25 mm) above the published grasp: about 3 cm of
+  clearance. In MuJoCo the full two-hand pick, carry and place behaved the same anywhere from
+  +4 to +45 mm (the panel's near edge stands proud of the table), so 25 mm leaves 2 cm either way.
+
+  **Is the octomap seeing the table?** With the robot at the table and everything launched:
+
+  ```bash
+  ros2 run g1_manipulation octomap_check.py --table-z -0.08
+  ```
+
+  walks the chain the map is built from -- the two clouds, their TF into the pelvis, the sensors
+  move_group loaded and its self-filtered clouds, the occupied voxels and the height of the
+  densest layer in front of the robot, and whether `/monitored_planning_scene` (what RViz draws)
+  carries the map -- and names the first broken link. RViz shows the octomap in the
+  MotionPlanning display, Scene Geometry > Voxel Rendering.
+
   **The routine.** Three commands, the same every time; nothing to line up by hand:
 
   ```bash
