@@ -950,14 +950,38 @@ bool G1ManipulationServer::moveLinear(
         moveit_msgs::msg::RobotTrajectory unchecked;
         const double free = group.computeCartesianPath({ pose }, 0.005, 0.0, unchecked, false);
         group.setEndEffectorLink(previous);
+        // What it runs into: the first waypoint of the unchecked line past where the checked one
+        // stopped, checked against the scene.
+        std::string hits;
+        const auto& pts = unchecked.joint_trajectory.points;
+        if (free > fraction + 1e-3 && !pts.empty())
+        {
+            // The first waypoint, from where the checked line stopped on, that touches anything.
+            const std::size_t from = std::min(
+                pts.size() - 1,
+                static_cast<std::size_t>(std::floor(fraction / std::max(free, 1e-6) * (pts.size() - 1))));
+            for (std::size_t k = from; k < pts.size() && hits.empty(); ++k)
+            {
+                std::map<std::string, double> joints;
+                for (std::size_t i = 0; i < unchecked.joint_trajectory.joint_names.size(); ++i)
+                {
+                    joints[unchecked.joint_trajectory.joint_names[i]] = pts[k].positions[i];
+                }
+                for (const std::string& h : collisionsAt(group.getName(), joints))
+                {
+                    hits += (hits.empty() ? " -- it hits: " : "; ") + h;
+                }
+            }
+        }
         RCLCPP_ERROR(
             get_logger(),
             "%s: only %.0f%% of the straight line is reachable without collision (%.0f%% "
-            "ignoring collisions: %s)",
+            "ignoring collisions: %s)%s",
             what.c_str(),
             100.0 * fraction,
             100.0 * free,
-            free > fraction + 1e-3 ? "something is in the way" : "the arm cannot follow the line");
+            free > fraction + 1e-3 ? "something is in the way" : "the arm cannot follow the line",
+            hits.c_str());
         return false;
     }
     // A Cartesian path comes back with timing for full speed; slow it to the skills' scaling,
@@ -998,7 +1022,8 @@ void G1ManipulationServer::usePinchFrame(ArmContext& arm)
 
 std::optional<bool> G1ManipulationServer::hasIk(
     const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
-    std::map<std::string, double>* joints, double timeout_s, bool avoid_collisions)
+    std::map<std::string, double>* joints, double timeout_s, bool avoid_collisions,
+    const std::map<std::string, double>* seed)
 {
     ik_broken_code_ = 0;
     if (!compute_ik_->wait_for_service(std::chrono::seconds(2)))
@@ -1008,7 +1033,17 @@ std::optional<bool> G1ManipulationServer::hasIk(
     auto request                          = std::make_shared<moveit_msgs::srv::GetPositionIK::Request>();
     request->ik_request.group_name        = group;
     request->ik_request.ik_link_name      = link;
-    request->ik_request.robot_state.is_diff = true;  // seeded from the current state
+    request->ik_request.robot_state.is_diff = true;  // seeded from the current state ...
+    if (seed)
+    {
+        // ... with these joints replaced: a neighbouring pose's solution, so consecutive poses of
+        // one motion come out on the same branch of the arm.
+        for (const auto& [name, value] : *seed)
+        {
+            request->ik_request.robot_state.joint_state.name.push_back(name);
+            request->ik_request.robot_state.joint_state.position.push_back(value);
+        }
+    }
     // Reach only by default; the planner checks collisions.
     request->ik_request.avoid_collisions             = avoid_collisions;
     request->ik_request.pose_stamped.header.frame_id = planning_frame_;
@@ -1217,7 +1252,7 @@ std::vector<std::string> G1ManipulationServer::collisionsAt(
     const std::string& group, const std::map<std::string, double>& joints)
 {
     std::vector<std::string> pairs;
-    if (joints.empty() || !check_validity_->wait_for_service(std::chrono::seconds(1)))
+    if (!check_validity_->wait_for_service(std::chrono::seconds(1)))
     {
         return pairs;
     }
@@ -1234,7 +1269,10 @@ std::vector<std::string> G1ManipulationServer::collisionsAt(
     {
         return pairs;
     }
-    for (const auto& c : future.get()->contacts)
+    // Held in a named variable: a range-for over future.get()->contacts would iterate a vector
+    // whose owning shared_ptr temporary is already destroyed.
+    const auto response = future.get();
+    for (const auto& c : response->contacts)
     {
         const std::string pair = c.contact_body_1 + " / " + c.contact_body_2;
         if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end())
@@ -1304,7 +1342,18 @@ bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& p
     planned = group.plan(plan);
     if (planned != moveit::core::MoveItErrorCode::SUCCESS)
     {
-        RCLCPP_ERROR(get_logger(), "%s: planning failed again (%d)", what.c_str(), planned.val);
+        std::string hits;
+        if (planned.val == moveit::core::MoveItErrorCode::START_STATE_INVALID ||
+            planned.val == moveit::core::MoveItErrorCode::START_STATE_IN_COLLISION)
+        {
+            // Name what the robot is touching where it stands: an error code alone leaves the
+            // operator guessing between the table, the part and the robot itself.
+            for (const std::string& h : collisionsAt(group.getName(), {}))
+            {
+                hits += (hits.empty() ? " -- the start state touches: " : "; ") + h;
+            }
+        }
+        RCLCPP_ERROR(get_logger(), "%s: planning failed again (%d)%s", what.c_str(), planned.val, hits.c_str());
         return false;
     }
     return true;
@@ -1781,11 +1830,18 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     at.entry    = slideBack(at.grasp, scoop_slide_m_, up_);
                     at.pregrasp = raised(*at.entry, up_, scoop_hover_m_);
                     ++ik_checked;
+                    // The grasp's own solution seeds the slide's start, which seeds the hover
+                    // above it: the arm then arrives at the table in the configuration it slides
+                    // in with. Left to itself the solver answered the hover from the current
+                    // pose, on whatever branch was nearest that -- one that met the table from
+                    // the side the descent and slide could not follow (the wrist into the torso
+                    // in the MoveIt harness, a few centimetres into the descent).
+                    std::map<std::string, double> grasp_joints, entry_joints;
                     const auto grasp_ik = hasIk(
                         ctx.arm_group,
                         ctx.grasp_frame,
                         at.grasp,
-                        nullptr,
+                        &grasp_joints,
                         scoop_variant_ik_timeout_s_);
                     if (!grasp_ik)
                     {
@@ -1810,8 +1866,19 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     // The pregrasp's joints are the goal planned to, so they must not collide:
                     // with the hand palm up near the body's middle, KDL's first answer often
                     // swings the shoulder into the torso, and the planner then rejects the goal.
-                    const char* missing = !*grasp_ik             ? "the grasp" :
-                                          !reach(ctx, *at.entry) ? "the start" :
+                    const char* missing = !*grasp_ik ? "the grasp" :
+                                          !hasIk(
+                                               ctx.arm_group,
+                                               ctx.grasp_frame,
+                                               *at.entry,
+                                               &entry_joints,
+                                               side_grasp_ik_timeout_s_,
+                                               // Free of everything: in front of the edge the
+                                               // hand touches nothing yet, and on some branches
+                                               // the wrist sits on the torso there.
+                                               /*avoid_collisions=*/true,
+                                               &grasp_joints)
+                                                  .value_or(false) ? "the start (collision-free)" :
                                           !reach(ctx, lifted)    ? "the lift" :
                                           !hasIk(
                                                ctx.arm_group,
@@ -1819,7 +1886,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                                                at.pregrasp,
                                                &at.pregrasp_joints,
                                                side_grasp_ik_timeout_s_,
-                                               /*avoid_collisions=*/true)
+                                               /*avoid_collisions=*/true,
+                                               &entry_joints)
                                                   .value_or(false) ?
                                                                 "the pregrasp (collision-free)" :
                                                                 nullptr;
@@ -2324,7 +2392,11 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     // A scoop first comes straight down in front of the edge to the surface; the approach below
     // is then the slide in under the edge, along the surface.
-    if (entry_goal && !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent"))
+    // If the straight line down is blocked -- on some arm configurations the wrist brushes the
+    // torso a few millimetres into it -- the same point is planned to instead: the hover is free
+    // space, and only the arrival has to be exact.
+    if (entry_goal && !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent") &&
+        !moveTo(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent, planned"))
     {
         fail(
             Pick::Feedback::PHASE_APPROACH,

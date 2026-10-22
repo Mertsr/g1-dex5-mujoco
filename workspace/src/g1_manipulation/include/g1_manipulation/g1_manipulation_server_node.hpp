@@ -236,7 +236,7 @@ private:
     std::optional<bool> hasIk(
         const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
         std::map<std::string, double>* joints = nullptr, double timeout_s = 0.05,
-        bool avoid_collisions = false);
+        bool avoid_collisions = false, const std::map<std::string, double>* seed = nullptr);
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
     double octomap_refill_s_{ 1.0 };
     /// plan(), and on failure clear the octomap, let it refill and plan once more: a start
