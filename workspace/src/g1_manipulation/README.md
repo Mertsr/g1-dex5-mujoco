@@ -191,11 +191,36 @@ result:
   fell back to one; pick then place went through end to end; a pelvis tipped 12 degrees back
   after the descent was caught at the table, re-levelled, and the pick went on in two hands.
 
-  `scripts/panel_stance.py` (`ros2 run g1_manipulation panel_stance.py --object panel_1`) can
-  still walk the base there: it tucks both arms beside the hips, then walks, closed loop on the
-  panel's pose from `/objects`, until the panel's origin is 0.395 m ahead of `base_footprint`
-  and centred on it. It drives `/cmd_vel_approach` (needs `nav:=true`); `--check` only reports
-  the offset.
+  **The routine.** Three commands, the same every time; nothing to line up by hand:
+
+  ```bash
+  ros2 run g1_manipulation ready_arms.py          # arms tucked beside the hips, hands open
+  ros2 run g1_manipulation go_to_stance.py panel_1   # walk to the stance, square to the table
+  ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: auto}" --feedback
+  ```
+
+  `ready_arms.py` puts both arms in the tucked posture (shoulder pitch 0.3, roll 0.2 outward,
+  elbow 1.2) and both hands open, through the same controllers MoveIt executes on: the start
+  the scoop's reach was checked from, and out of the table's and the lifting hand's way. Run it
+  first, and again after a pick that failed half-way.
+
+  `go_to_stance.py NAME` walks base_footprint, closed loop on TF, to a fixed pose from
+  `config/stances.yaml` (or `~/.ros/g1_stances.yaml`): no perception, since the head camera
+  does not see the panels from a metre or two away. `panel_1` is (1.12, -0.78) facing +x in
+  odom -- in the simulator with `odometry:=sportmodestate` odom is the MuJoCo world -- the
+  middle of the stances the two-hand scoop of the first panel works from, so arriving a few
+  centimetres or degrees off (it stops inside 2 cm and 3 degrees) changes nothing. Further than
+  1 m it turns to the stance and walks there, nearer it moves forward, sideways and turns at
+  once; straight, with no obstacle avoidance, through `/cmd_vel_approach` (needs `nav:=true`).
+  `--save NAME` records where the robot stands now as a stance (a place to put the panel down,
+  say), `--list` shows them, `--check` only reports the offset, `--x --y --yaw-deg` go to an
+  ad-hoc pose. Checked against a kinematic stand-in for the walking base (the isaaclab gait's
+  dead zone, a 0.3 s lag, 10% velocity noise) from 0.14-2.1 m away and up to 143 degrees off:
+  it stopped 0.2-0.9 cm and under 1.2 degrees from the stance each time. From the stance and
+  from 3-4 cm and 3 degrees off it, the pick went through in two hands against move_group.
+
+  `scripts/panel_stance.py` is the older, perception-driven alternative: it walks closed loop
+  on the panel's tracked pose instead, so the panel has to be in view.
 - `<object>/slot/<name>`: where another object sits on it, such as `pallet/slot/nest_2`. `Place`
   with that as `surface_object_id` puts the held object exactly at that pose. Because the pick
   remembers how it gripped the object, the hand goes wherever that leaves it. The descent and the

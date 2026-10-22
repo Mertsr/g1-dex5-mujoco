@@ -46,7 +46,8 @@ install(TARGETS g1_object_pose_source_node g1_manipulation_server_node
   EXPORT export_${PROJECT_NAME} DESTINATION lib)
 install(TARGETS g1_object_pose_source g1_manipulation_server DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
-install(PROGRAMS scripts/panel_stance.py DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/panel_stance.py scripts/go_to_stance.py scripts/ready_arms.py
+        DESTINATION lib/${PROJECT_NAME})
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
