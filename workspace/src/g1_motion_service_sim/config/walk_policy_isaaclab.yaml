@@ -97,7 +97,24 @@
       # delta added on top, defaulting to 0). NOT confirmed to be the exact quantity the policy
       # was trained to track at this exact value -- still the first thing to question if the
       # policy behaves oddly holding a fixed command.
+      #
+      # This is the STANDING height. Measured in MuJoCo with policy.onnx: at 0.8 the robot
+      # stands with nearly straight knees (pelvis ~0.79 m), dead still -- and cannot start a
+      # gait from there; a 0.2 m/s or 0.6 rad/s command moves it a few cm and stops. That was
+      # the "freezes on the first move, walks fine once it gets going" problem.
       command_height: 0.8
+
+      # The height command while the robot is driven (any non-zero velocity command), and for
+      # walk_command_height_hold_s after the last one, so a brief pause between Nav2 commands
+      # does not send it back up. Measured: at 0.72 every command starts at once (0.2 m/s
+      # forward, 0.5 rad/s turn, 0.2 m/s sideways, backward); 0.75 starts too but turns much
+      # more slowly; 0.70 behaves like 0.72. Standing at 0.72 the robot shuffles a few cm/s,
+      # which is why it is not the standing height. <= 0 disables the switch (fixed
+      # command_height, the old behaviour).
+      walk_command_height: 0.72
+      walk_command_height_hold_s: 1.0
+      # How fast the height command moves between the two, per second. 5.0 = within two ticks.
+      command_height_rate: 5.0
 
       # Gains to drive the 12 leg joints -- DDS motor order (same 15-wide layout as
       # walk_policy.yaml's lower_kp/lower_kd: legs 0-11 then waist 12-14), so the existing

@@ -1,5 +1,7 @@
 #include "g1_motion_service_sim/walk_policy_isaaclab.hpp"
 
+#include <algorithm>
+
 namespace g1_motion_service_sim
 {
 
@@ -62,6 +64,19 @@ std::array<float, kIlNumJoints> ilBuildFullAction(
     for (std::size_t i = 0; i < kIlNumLegs; ++i)
         full[static_cast<std::size_t>(cfg.leg_action_indices[i])] = raw_action[i];
     return full;
+}
+
+double ilCommandHeight(
+    double current, double stand_height, double walk_height, double seconds_since_motion,
+    double hold_s, double max_step)
+{
+    if (walk_height <= 0.0)
+        return stand_height;  // switch disabled: the fixed height, as before
+    const bool   moving = seconds_since_motion >= 0.0 && seconds_since_motion <= hold_s;
+    const double goal   = moving ? walk_height : stand_height;
+    if (max_step <= 0.0)
+        return goal;
+    return std::clamp(goal, current - max_step, current + max_step);
 }
 
 }  // namespace g1_motion_service_sim

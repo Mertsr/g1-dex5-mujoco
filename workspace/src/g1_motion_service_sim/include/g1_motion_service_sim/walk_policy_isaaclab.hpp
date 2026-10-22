@@ -216,6 +216,25 @@ std::array<double, kIlNumLegs> ilActionToLegTargets(
 std::array<float, kIlNumJoints> ilBuildFullAction(
     const std::array<float, kIlNumLegs>& raw_action, const IlPolicyConfig& cfg);
 
+/**
+ * @brief The height command for this tick: walk_height while the robot is being driven (and
+ *        for hold_s after the last non-zero command), stand_height otherwise, approached at
+ *        most max_step per tick.
+ *
+ * Why two heights (measured in MuJoCo against policy.onnx on this robot): at 0.8 the policy
+ * stands with its knees almost straight (pelvis ~0.79 m). That stance is perfectly still, but
+ * from it the policy cannot start a gait -- a 0.2 m/s or 0.6 rad/s command moves the robot a
+ * few centimetres and then nothing. Once it is walking it is fine, which is exactly the
+ * "freezes on the first move, then walks" symptom. At 0.72 it starts at once, but standing
+ * there it shuffles a few cm/s, which is no good next to a table. So: crouch the moment a
+ * command arrives, stand back up once the robot has been stopped for hold_s.
+ *
+ * @param seconds_since_motion seconds since the last non-zero command; negative for "never".
+ */
+double ilCommandHeight(
+    double current, double stand_height, double walk_height, double seconds_since_motion,
+    double hold_s, double max_step);
+
 }  // namespace g1_motion_service_sim
 
 #endif  // G1_MOTION_SERVICE_SIM__WALK_POLICY_ISAACLAB_HPP_

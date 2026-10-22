@@ -245,5 +245,22 @@ TEST(WalkPolicyIsaacLab, ActionDelayHoldsOldestUntilFullThenReturnsDelayedValue)
     EXPECT_NEAR(out[0], 2.0, 1e-9);
 }
 
+TEST(WalkPolicyIsaacLab, CommandHeightCrouchesWhileDrivenAndStandsBackUp)
+{
+    // Never driven: the standing height.
+    EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.72, -1.0, 1.0, 1.0), 0.8, 1e-12);
+    // A command just arrived: straight to the walking height when the step allows it ...
+    EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.72, 0.0, 1.0, 1.0), 0.72, 1e-12);
+    // ... at most max_step per tick otherwise.
+    EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.72, 0.0, 1.0, 0.05), 0.75, 1e-12);
+    // Stopped, but within hold_s: stay crouched, so a pause between Nav2 commands does not
+    // put the robot back into the stance it cannot start from.
+    EXPECT_NEAR(ilCommandHeight(0.72, 0.8, 0.72, 0.9, 1.0, 1.0), 0.72, 1e-12);
+    // Stopped for longer: stand back up.
+    EXPECT_NEAR(ilCommandHeight(0.72, 0.8, 0.72, 1.5, 1.0, 1.0), 0.8, 1e-12);
+    // walk_height <= 0 disables the switch.
+    EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.0, 0.0, 1.0, 1.0), 0.8, 1e-12);
+}
+
 }  // namespace
 }  // namespace g1_motion_service_sim

@@ -417,6 +417,13 @@ void MotionServiceSim::lowstateCallback(const unitree_hg::msg::LowState::ConstSh
     // Same approach HuggingFace ship in LeRobot's production G1 integration
     // (robots/unitree_g1/holosoma_locomotion.py) against a near-identical 100-obs/29-action
     // policy, for the same reason: "prevents policy from reacting to teleop arm movements".
+    //
+    // With walk_policy:=isaaclab, walk_policy_config_ is never loaded (setUpWalkPolicy() returns
+    // before copying walker.onnx's defaults), so the arms are shown at 0 rad, not at IsaacLab's
+    // default posture. Measured in MuJoCo with policy.onnx, that is the variant that walks:
+    // showing the IsaacLab defaults instead (offset 0 in its observation) leaves the robot
+    // standing tall and ignoring both velocity and height commands. Keep it that way unless
+    // the replacement is tested to walk.
     if (mask_arm_observations_)
     {
         for (std::size_t i = 0; i < kNumArmMotors; ++i)
@@ -565,6 +572,10 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     const auto action_delay_steps =
         declare_parameter("walk_policy_isaaclab.action_delay_steps", std::int64_t{ 0 });
     il_stand_reset_after_s_ = declare_parameter("walk_policy_isaaclab.stand_reset_after_s", 1.0);
+    il_walk_height_         = declare_parameter("walk_policy_isaaclab.walk_command_height", 0.72);
+    il_walk_height_hold_s_  = declare_parameter("walk_policy_isaaclab.walk_command_height_hold_s", 1.0);
+    il_height_rate_         = declare_parameter("walk_policy_isaaclab.command_height_rate", 5.0);
+    il_rate_hz_             = rate_hz;
 
     if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||
         default_joint_vel.size() != kIlNumJoints || leg_action_indices.size() != kIlNumLegs ||
@@ -583,6 +594,7 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
         return false;
     }
 
+    il_stand_height_ = il_config_.command_height;
     std::copy(default_joint_pos.begin(), default_joint_pos.end(), il_config_.default_joint_pos.begin());
     std::copy(default_joint_vel.begin(), default_joint_vel.end(), il_config_.default_joint_vel.begin());
     for (std::size_t i = 0; i < kIlNumLegs; ++i)
@@ -636,12 +648,14 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
         get_logger(),
         "IsaacLab-sourced walking policy loaded from '%s' (warm-up %.1f ms), running at %.1f Hz "
         "with %zu-tick action delay, owning the 12 leg motors; waist held at default, arms kept "
-        "by /arm_sdk. UNVERIFIED gains and command semantics -- see walk_policy_isaaclab.yaml's "
-        "own comments before trusting this with real motion.",
+        "by /arm_sdk; height command %.2f standing, %.2f walking. UNVERIFIED gains -- see "
+        "walk_policy_isaaclab.yaml's own comments before trusting this with real motion.",
         model_path.c_str(),
         il_session_->warmupSeconds() * 1000.0,
         rate_hz,
-        il_delay_->delaySteps());
+        il_delay_->delaySteps(),
+        il_stand_height_,
+        il_walk_height_);
     return true;
 }
 
@@ -665,6 +679,7 @@ void MotionServiceSim::walkPolicyIsaacLabTick()
     {
         il_zero_cmd_since_.reset();
         il_stand_reset_done_ = false;
+        il_last_motion_      = now;
     }
     else
     {
@@ -686,6 +701,18 @@ void MotionServiceSim::walkPolicyIsaacLabTick()
                 il_stand_reset_after_s_);
         }
     }
+
+    // Crouch to walk while driven, stand tall once stopped -- see ilCommandHeight(). Checked
+    // after the bookkeeping above so the very first non-zero tick already crouches.
+    const double since_motion =
+        il_last_motion_ ? std::chrono::duration<double>(now - *il_last_motion_).count() : -1.0;
+    il_config_.command_height = ilCommandHeight(
+        il_config_.command_height,
+        il_stand_height_,
+        il_walk_height_,
+        since_motion,
+        il_walk_height_hold_s_,
+        il_height_rate_ / il_rate_hz_);
 
     IlPolicyInputs inputs{};
     for (std::size_t il = 0; il < kIlNumJoints; ++il)

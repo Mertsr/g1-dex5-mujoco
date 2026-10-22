@@ -230,6 +230,16 @@ private:
     double                                               il_stand_reset_after_s_{ 1.0 };
     std::optional<std::chrono::steady_clock::time_point> il_zero_cmd_since_{};
     bool                                                 il_stand_reset_done_{ false };
+
+    /// Height command switch -- see ilCommandHeight(). il_config_.command_height is the
+    /// standing height; il_walk_height_ is used while driven and for il_walk_height_hold_s_
+    /// after the last non-zero command. il_walk_height_ <= 0 keeps the old fixed height.
+    double                                               il_stand_height_{ 0.8 };
+    double                                               il_walk_height_{ 0.72 };
+    double                                               il_walk_height_hold_s_{ 1.0 };
+    double                                               il_height_rate_{ 5.0 };  // per second
+    double                                               il_rate_hz_{ 50.0 };
+    std::optional<std::chrono::steady_clock::time_point> il_last_motion_{};
 };
 
 }  // namespace g1_motion_service_sim
