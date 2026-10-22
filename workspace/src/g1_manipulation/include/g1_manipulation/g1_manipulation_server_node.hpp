@@ -34,6 +34,7 @@
 #include <moveit_msgs/srv/apply_planning_scene.hpp>
 #include <moveit_msgs/srv/get_planning_scene.hpp>
 #include <moveit_msgs/srv/get_position_ik.hpp>
+#include <moveit_msgs/srv/get_state_validity.hpp>
 #include <std_srvs/srv/empty.hpp>
 #include <mutex>
 #include <optional>
@@ -226,6 +227,7 @@ private:
     rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr   get_scene_;
     rclcpp::Client<moveit_msgs::srv::ApplyPlanningScene>::SharedPtr apply_scene_;
     rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr      compute_ik_;
+    rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr   check_validity_;
     int ik_broken_code_{ 0 };  ///< last /compute_ik error that was not "no solution"
     /// Whether `group` can put `link` at `pose` (planning frame), by move_group's /compute_ik:
     /// collisions ignored, or with `avoid_collisions` only a solution free of them (the arm off
@@ -335,6 +337,7 @@ private:
     double scoop_surface_front_m_{ 0.12 };
     double scoop_surface_thickness_m_{ 0.05 };
     bool   scoop_table_box_{ false };
+    double clamp_octomap_refill_s_{ 1.5 };
     /// Clears the octomap and waits `wait_s` for the sensors to refill it.
     void refreshOctomap(double wait_s);
     /// The table under a scooped part as a collision box (see scoop_surface_*); its id, or empty.
@@ -342,6 +345,9 @@ private:
     void        removeSurfaceSlab(const std::string& id);
     /// Removes every world collision object left over from earlier picks; returns how many.
     std::size_t clearStaleWorldObjects();
+    /// What the given joint values of a group collide with, as "a / b" pairs; empty if valid
+    /// or move_group did not answer.
+    std::vector<std::string> collisionsAt(const std::string& group, const std::map<std::string, double>& joints);
     std::string  gravity_frame_{ "odom" };
     tf2::Vector3 up_{ 0.0, 0.0, 1.0 };
     void         refreshUp();

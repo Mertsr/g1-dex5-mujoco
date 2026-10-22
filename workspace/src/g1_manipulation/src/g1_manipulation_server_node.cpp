@@ -363,6 +363,11 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // the very pick that clears and refills it, and the box only duplicated it -- it was added
     // when the octomap was silently empty (moveit_ros_perception was not installed).
     scoop_table_box_             = declare_parameter<bool>("scoop_table_box", false);
+    // Before the clamping hand reaches for the other half, the octomap is cleared and refilled
+    // for this long. What it held from before the lift is stale by then -- the part's own voxels
+    // where it lay, whatever the gripping arm was in front of -- and the part, attached now, is
+    // cut out of every new cloud.
+    clamp_octomap_refill_s_      = declare_parameter<double>("clamp_octomap_refill_s", 1.5);
     grasp_min_descent_   = declare_parameter<double>("grasp_min_descent", 0.25);
     grasp_max_plans_     = static_cast<int>(declare_parameter<int64_t>("grasp_max_plans", 6));
     side_grasp_min_forward_ = declare_parameter<double>("side_grasp_min_forward", 0.5);
@@ -497,6 +502,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // solver plugin is configured, loaded and proven where the planning happens, and an
     // in-process copy failed to instantiate here ("No kinematics solver instantiated").
     compute_ik_ = create_client<moveit_msgs::srv::GetPositionIK>("/compute_ik");
+    check_validity_ = create_client<moveit_msgs::srv::GetStateValidity>("/check_state_validity");
     clear_octomap_ = create_client<std_srvs::srv::Empty>("/clear_octomap");
 }
 
@@ -1205,6 +1211,38 @@ std::string G1ManipulationServer::addSurfaceSlab(
         top_at_grasp.z(),
         back);
     return slab.id;
+}
+
+std::vector<std::string> G1ManipulationServer::collisionsAt(
+    const std::string& group, const std::map<std::string, double>& joints)
+{
+    std::vector<std::string> pairs;
+    if (joints.empty() || !check_validity_->wait_for_service(std::chrono::seconds(1)))
+    {
+        return pairs;
+    }
+    auto request                         = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
+    request->group_name                  = group;
+    request->robot_state.is_diff         = true;
+    for (const auto& [name, value] : joints)
+    {
+        request->robot_state.joint_state.name.push_back(name);
+        request->robot_state.joint_state.position.push_back(value);
+    }
+    auto future = check_validity_->async_send_request(request);
+    if (future.wait_for(std::chrono::seconds(3)) != std::future_status::ready)
+    {
+        return pairs;
+    }
+    for (const auto& c : future.get()->contacts)
+    {
+        const std::string pair = c.contact_body_1 + " / " + c.contact_body_2;
+        if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end())
+        {
+            pairs.push_back(pair);
+        }
+    }
+    return pairs;
 }
 
 std::size_t G1ManipulationServer::clearStaleWorldObjects()
@@ -2510,6 +2548,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         MoveGroup* support_hand = groupFor(support.hand_group);
 
         refreshUp();  // the robot leans differently with the part held out
+        if (clamp && clamp_octomap_refill_s_ > 0.0)
+        {
+            refreshOctomap(clamp_octomap_refill_s_);
+        }
         tf2::Quaternion lq;
         tf2::fromMsg(lifted.orientation, lq);
         tf2::Vector3 heading = tf2::Matrix3x3(lq).getColumn(0);
@@ -2521,6 +2563,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         // combination found at the start first, then the others, the first the clamping hand
         // still reaches.
         std::optional<ClampPoses> reachable_now;
+        std::string               clamp_blocked_by;
         if (clamp)
         {
             std::vector<std::pair<double, int>> combos{ { clamp_turn,
@@ -2541,6 +2584,21 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                            scoop_variant_ik_timeout_s_)
                     .value_or(false);
             };
+            // The approach point is the one pose the clamping arm is PLANNED to, against the
+            // octomap, the part in the other hand and the rest of the robot: reachable is not
+            // enough there, it has to be reachable without touching anything -- otherwise the
+            // planner spends its whole budget sampling a goal that does not exist.
+            const auto reach_free = [&](const geometry_msgs::msg::Pose& p) {
+                return hasIk(
+                           support.arm_group,
+                           support.grasp_frame,
+                           p,
+                           nullptr,
+                           std::max(scoop_variant_ik_timeout_s_, 0.3),
+                           /*avoid_collisions=*/true)
+                    .value_or(false);
+            };
+            std::optional<ClampPoses> blocked;  // the first one only collision kept out
             for (const auto& [t, k] : combos)
             {
                 const ClampPoses c = clampPoses(
@@ -2550,7 +2608,16 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     scoop_clamp_pre_m_[static_cast<std::size_t>(2 * k)],
                     scoop_clamp_pre_m_[static_cast<std::size_t>(2 * k + 1)],
                     t);
-                if (reach(c.at) && reach(c.lifted) && reach(c.in_front) && reach(c.pre))
+                const bool reachable = reach(c.at) && reach(c.lifted) && reach(c.in_front) && reach(c.pre);
+                if (reachable && !reach_free(c.pre))
+                {
+                    if (!blocked)
+                    {
+                        blocked = c;
+                    }
+                    continue;
+                }
+                if (reachable)
                 {
                     RCLCPP_INFO(
                         get_logger(),
@@ -2562,6 +2629,28 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     reachable_now = c;
                     break;
                 }
+            }
+            if (!reachable_now && blocked)
+            {
+                // Every placement the arm reaches is blocked at its approach point. Name what
+                // it hits, from the reach-only solution there, instead of letting the planner
+                // time out on it.
+                std::map<std::string, double> joints;
+                hasIk(support.arm_group, support.grasp_frame, blocked->pre, &joints, 0.3);
+                const std::vector<std::string> hits = collisionsAt(support.arm_group, joints);
+                std::string list;
+                for (const std::string& h : hits)
+                {
+                    list += (list.empty() ? "" : "; ") + h;
+                }
+                clamp_blocked_by = list.empty() ? std::string("collision (no contact reported)") : list;
+                RCLCPP_WARN(
+                    get_logger(),
+                    "pick %s: every %s-hand clamp the arm reaches is blocked at its approach point; "
+                    "there it hits: %s",
+                    object_id.c_str(),
+                    support_name.c_str(),
+                    clamp_blocked_by.c_str());
             }
         }
         const int        approach = std::max(clamp_approach, 0);
@@ -2625,7 +2714,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             // Straight open on the way (the clamp's shape, thumb across, would hit the hip it
             // starts beside), the clamp's shape at the approach point.
             bool there =
-                support_arm && support_hand && moveToNamed(*support_hand, "open") &&
+                clamp_blocked_by.empty() && support_arm && support_hand &&
+                moveToNamed(*support_hand, "open") &&
                 moveTo(*support_arm, pre, support.grasp_frame, "clamp: back from the edge");
             // No fallback that plans with the hand exempt from the octomap: with the hand and
             // the wrist exempt, the planner routed the arm through the table.
@@ -2728,7 +2818,10 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             }
             allowHandContact(support, held_touch, false);
             support_note =
-                "; the " + support_name + " hand could not take the other half, held in one hand";
+                "; the " + support_name + " hand could not take the other half" +
+                (clamp_blocked_by.empty() ? std::string() :
+                                            " (its approach point is blocked: " + clamp_blocked_by + ")") +
+                ", held in one hand";
             support_name.clear();
         }
     }
