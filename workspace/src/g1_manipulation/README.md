@@ -246,6 +246,17 @@ result:
   ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: auto}" --feedback
   ```
 
+  One hand or two is chosen per pick with the goal's `hands`: `1` the gripping hand alone,
+  `2` the other hand takes the panel's other half too, `0` (or left out) the server's
+  `scoop_two_hand` parameter, as before:
+
+  ```bash
+  ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: right, hands: 1}" --feedback
+  ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: right, hands: 2}" --feedback
+  ```
+
+  Place needs nothing: it sets the part down with however many hands hold it.
+
   `ready_arms.py` puts both arms in the tucked posture (shoulder pitch 0.3, roll 0.2 outward,
   elbow 1.2) and both hands open, through the same controllers MoveIt executes on: the start
   the scoop's reach was checked from, and out of the table's and the lifting hand's way. Run it

@@ -1482,6 +1482,16 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         goal_handle->abort(result);
         return;
     }
+    if (goal->hands > Pick::Goal::HANDS_TWO)
+    {
+        result->success = false;
+        result->message = "hands must be 0 (default), 1 or 2, got " + std::to_string(goal->hands);
+        goal_handle->abort(result);
+        return;
+    }
+    // This pick's own choice, the server's default unless the goal says: one hand, or two.
+    const bool two_hand = goal->hands == Pick::Goal::HANDS_DEFAULT ? scoop_two_hand_ :
+                          goal->hands == Pick::Goal::HANDS_TWO && scoop_second_hand_ != "none";
     // Located before the arm is chosen: with arm "auto" the grasp point decides it. Nothing has
     // moved yet, so a failure here needs no clean-up.
     const auto abort_locating = [&](const std::string& why) {
@@ -1784,7 +1794,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 // the right hand would clamp past the panel's end. The left hand's scoop is
                 // picked in one hand.
                 const bool clamping =
-                    scoop_two_hand_ && scoop_second_hand_ == "clamp" && a == "right";
+                    two_hand && scoop_second_hand_ == "clamp" && a == "right";
                 if (!graspIsForArm(cname, a) ||
                     static_cast<int>(attempts.size()) >= grasp_max_plans_)
                 {
@@ -2597,7 +2607,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     tf2::Transform grasp_T_support;
     std::string    support_note;
     const bool     clamp = scoop_second_hand_ == "clamp";
-    if (entry_goal && scoop_two_hand_ && clamp && clamp_approach < 0)
+    if (entry_goal && two_hand && clamp && clamp_approach < 0)
     {
         // The candidate check found no placement both hands reach: not attempted, rather than
         // reaching for it and backing out.
@@ -2610,7 +2620,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             (scoop_stance_hint.empty() ? std::string() : " (" + scoop_stance_hint + ")");
         RCLCPP_WARN(get_logger(), "pick %s%s", object_id.c_str(), support_note.c_str());
     }
-    else if (entry_goal && scoop_two_hand_)
+    else if (entry_goal && two_hand)
     {
         support_name = arm_name == "left" ? "right" : "left";
         ArmContext support;

@@ -1,4 +1,4 @@
-# Pick a known object off a surface with one arm.
+# Pick a known object off a surface: with one arm, and for a scoop optionally the other hand too.
 #
 # The pose is not a goal field: the server reads it from /objects when the goal starts, so a
 # retry re-reads it rather than replaying a stale one. A goal for an object that is missing or
@@ -12,6 +12,14 @@ string ARM_LEFT=left
 string ARM_RIGHT=right
 string ARM_AUTO=auto
 string arm
+# How many hands hold the part, for grasps that can take a second hand (the scoops). 0: the
+# server's default (its scoop_two_hand parameter); 1: the gripping hand alone; 2: the other
+# hand takes the part's other half too. A 2 the scene cannot give still ends held in one hand,
+# and the result message says so.
+uint8 HANDS_DEFAULT=0
+uint8 HANDS_ONE=1
+uint8 HANDS_TWO=2
+uint8 hands
 ---
 bool success
 # On failure, names the phase that failed and why. Not meant to be parsed.
