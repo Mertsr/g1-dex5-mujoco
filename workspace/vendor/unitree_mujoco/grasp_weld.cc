@@ -1,5 +1,6 @@
 #include "grasp_weld.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -40,6 +41,13 @@ struct Config
     // Released below this, not at close_fraction: without the gap, a hand holding at exactly
     // the threshold would drop and re-grab the object every few ticks.
     double release_fraction = 0.3;
+
+    // Scene-local only (MJCF <custom><numeric name="grasp_weld_...">, read in sceneOverrides):
+    // the hand's collision geometry must be touching the object for it to be taken, and a hand
+    // closing on an object another hand already holds gets a weld this soft (solref time
+    // constant, s; 0 = the scene's own solref). Off and 0 everywhere else, as before.
+    bool   require_contact  = false;
+    double second_timeconst = 0.0;
 };
 
 // One managed weld: a palm, an object, and the constraint that can join them.
@@ -49,6 +57,7 @@ struct ManagedWeld
     int         palm_id   = -1;
     int         object_id = -1;
     std::string name;
+    mjtNum      solref[mjNREF]{};  // as the scene declared it, restored for a first hand
 };
 
 // A hand, and whichever weld it currently holds.
@@ -165,6 +174,50 @@ double closureOf(const mjModel* model, const mjData* data, const Hand& hand)
     return total / static_cast<double>(hand.finger_qpos_adr.size());
 }
 
+// Settings a scene carries for itself: <custom><numeric name="grasp_weld_<key>" data="..."/>.
+// Only the keys present override; a scene without them behaves exactly as before.
+void sceneOverrides(const mjModel* model, Config& cfg)
+{
+    const auto get = [model](const char* key, double& out) {
+        const int id = mj_name2id(model, mjOBJ_NUMERIC, key);
+        if (id < 0 || model->numeric_size[id] < 1)
+        {
+            return false;
+        }
+        out = model->numeric_data[model->numeric_adr[id]];
+        return true;
+    };
+    double v = 0.0;
+    if (get("grasp_weld_capture_radius", v)) cfg.capture_radius_m = v;
+    if (get("grasp_weld_close_fraction", v)) cfg.close_fraction = v;
+    if (get("grasp_weld_release_fraction", v)) cfg.release_fraction = v;
+    if (get("grasp_weld_require_contact", v)) cfg.require_contact = v != 0.0;
+    if (get("grasp_weld_second_timeconst", v)) cfg.second_timeconst = v;
+    std::fprintf(
+        stderr,
+        "[grove_g1] grasp weld: capture %.2f m, close %.2f, release %.2f, contact %s, second "
+        "hand %s\n",
+        cfg.capture_radius_m, cfg.close_fraction, cfg.release_fraction,
+        cfg.require_contact ? "required" : "not required",
+        cfg.second_timeconst > 0.0 ? "soft" : "as declared");
+}
+
+// True if any geom under the palm (the hand's own collision geometry) touches the object.
+bool handTouches(const mjModel* model, const mjData* data, int palm_id, int object_id)
+{
+    for (int i = 0; i < data->ncon; ++i)
+    {
+        const int b1 = model->geom_bodyid[data->contact[i].geom1];
+        const int b2 = model->geom_bodyid[data->contact[i].geom2];
+        if ((b1 == object_id && isInSubtree(model, b2, palm_id)) ||
+            (b2 == object_id && isInSubtree(model, b1, palm_id)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 double distanceBetween(const mjData* data, int body_a, int body_b)
 {
     double d[3];
@@ -178,8 +231,20 @@ double distanceBetween(const mjData* data, int body_a, int body_b)
 // model's initial configuration, so an untouched weld would snap the object to wherever it
 // happened to start relative to the hand. Layout verified against MuJoCo 3.3.6 rather than
 // assumed -- anchor(3), relpose position(3), relpose quaternion(4), torquescale(1).
-void engage(mjModel* model, mjData* data, const ManagedWeld& weld)
+void engage(mjModel* model, mjData* data, const ManagedWeld& weld, double timeconst)
 {
+    // A second hand on an object already held: soft, so the two arms are not locked into one
+    // rigid chain. Otherwise the scene's own solref.
+    mjtNum* solref = model->eq_solref + weld.eq_id * mjNREF;
+    if (timeconst > 0.0)
+    {
+        solref[0] = timeconst;
+        solref[1] = 1.0;
+    }
+    else
+    {
+        mju_copy(solref, weld.solref, mjNREF);
+    }
     double palm_quat_inv[4];
     double delta[3];
     double rel_pos[3];
@@ -196,7 +261,8 @@ void engage(mjModel* model, mjData* data, const ManagedWeld& weld)
     eq_data[10] = 1.0;
 
     data->eq_active[weld.eq_id] = 1;
-    std::fprintf(stderr, "[grove_g1] grasp: %s engaged\n", weld.name.c_str());
+    std::fprintf(stderr, "[grove_g1] grasp: %s engaged%s\n", weld.name.c_str(),
+                 timeconst > 0.0 ? " (soft: the other hand holds it too)" : "");
 }
 
 void release(mjData* data, const ManagedWeld& weld)
@@ -231,6 +297,7 @@ bool resolve(const mjModel* model, std::vector<ManagedWeld>& welds, std::vector<
         weld.palm_id   = model->eq_obj1id[eq];
         weld.object_id = model->eq_obj2id[eq];
         weld.name      = name;
+        mju_copy(weld.solref, model->eq_solref + eq * mjNREF, mjNREF);
         welds.push_back(weld);
 
         // Inactive at rest, whatever the scene said: a weld that starts engaged would hold an
@@ -285,7 +352,7 @@ bool resolve(const mjModel* model, std::vector<ManagedWeld>& welds, std::vector<
     return true;
 }
 
-void run(const Config cfg, mjModel** model, mjData** data, std::recursive_mutex* sim_mtx)
+void run(Config cfg, mjModel** model, mjData** data, std::recursive_mutex* sim_mtx)
 {
     auto& s = state();
     while (s.running.load(std::memory_order_relaxed) && (*model == nullptr || *data == nullptr))
@@ -303,6 +370,12 @@ void run(const Config cfg, mjModel** model, mjData** data, std::recursive_mutex*
     if (!resolve(m, welds, hands))
     {
         std::fprintf(stderr, "[grove_g1] no grasp welds in this scene; grasp weld is OFF\n");
+        return;
+    }
+    sceneOverrides(m, cfg);
+    if (cfg.capture_radius_m <= 0.0 || cfg.release_fraction > cfg.close_fraction)
+    {
+        std::fprintf(stderr, "[grove_g1] the scene's grasp_weld settings are inconsistent; grasp weld is OFF\n");
         return;
     }
 
@@ -353,7 +426,8 @@ void run(const Config cfg, mjModel** model, mjData** data, std::recursive_mutex*
                     continue;
                 }
                 const double gap = distanceBetween(d, welds[i].palm_id, welds[i].object_id);
-                if (gap < best_gap)
+                if (gap < best_gap &&
+                    (!cfg.require_contact || handTouches(m, d, hand.palm_id, welds[i].object_id)))
                 {
                     best     = static_cast<int>(i);
                     best_gap = gap;
@@ -361,7 +435,11 @@ void run(const Config cfg, mjModel** model, mjData** data, std::recursive_mutex*
             }
             if (best >= 0)
             {
-                engage(m, d, welds[best]);
+                const int  object  = welds[best].object_id;
+                const bool already = std::any_of(welds.begin(), welds.end(), [&](const ManagedWeld& w) {
+                    return w.object_id == object && w.palm_id != hand.palm_id && d->eq_active[w.eq_id] != 0;
+                });
+                engage(m, d, welds[best], already ? cfg.second_timeconst : 0.0);
                 hand.holding_eq = best;
             }
         }

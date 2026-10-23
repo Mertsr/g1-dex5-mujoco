@@ -225,6 +225,19 @@ result:
   carries the map -- and names the first broken link. RViz shows the octomap in the
   MotionPlanning display, Scene Geometry > Voxel Rendering.
 
+  **world:=conveyor_fixed.** conveyor_flat with a grasp weld between each palm and each panel
+  (`g1_bringup/tools/make_conveyor_fixed_scene.py`): a hand whose fingers have closed while
+  touching a panel holds it fixed where it sits, until the hand opens again; a second hand on a
+  panel the first already holds gets a soft weld, so the two arms are not locked into one rigid
+  chain. SIMULATION ONLY, standing in for the real RH56E2's grip, which the simulated fingers do
+  not reproduce: on conveyor_flat the panel rolled up to 40 degrees in one hand and was pulled
+  out by the second. In a MuJoCo-in-the-loop harness (this scene, rendered head depth feeding
+  the octomap, the arms under arm_sdk's gains) the two-hand pick lifted the panel 26 cm, carried
+  it at 5-7 degrees without moving in the hands, and set it back down 6 mm from where it was
+  taken. What it does not prove: that the real fingers grip -- only that the arms, the planning
+  and the placing work. Needs the simulator rebuilt with this repo's
+  `workspace/vendor/unitree_mujoco/grasp_weld.cc`.
+
   **The routine.** Three commands, the same every time; nothing to line up by hand:
 
   ```bash

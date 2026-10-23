@@ -3395,7 +3395,10 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     {
         allowHandContact(arm, { held_id }, false);
     }
-    if (!(grasp_T_object ? moveLinear(*arm_group, preplace, arm.grasp_frame, "retreat")
+    // Straight up first; if that is blocked -- after a two-hand place the other hand, already
+    // out, can be right above this one ("right_plam_2 / left_wrist_pitch_link") -- planned.
+    if (!(grasp_T_object ? moveLinear(*arm_group, preplace, arm.grasp_frame, "retreat") ||
+                               moveTo(*arm_group, preplace, arm.grasp_frame, "retreat, planned")
                          : moveTo(*arm_group, preplace, arm.grasp_frame, "retreat")))
     {
         fail(Place::Feedback::PHASE_RETREAT, "could not retreat clear of the object");

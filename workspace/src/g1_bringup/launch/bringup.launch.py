@@ -346,6 +346,8 @@ def _setup(context, *args, **kwargs):
                         {
                             "conveyor2": "object_tracker_conveyor2.yaml",
                             "conveyor_flat": "object_tracker_conveyor_flat.yaml",
+                            # The same panels on the same table, only held differently.
+                            "conveyor_fixed": "object_tracker_conveyor_flat.yaml",
                         }.get(
                             LaunchConfiguration("world").perform(context),
                             "object_tracker_conveyor.yaml",
@@ -506,7 +508,7 @@ def generate_launch_description():
             default_value="",
             description="The tracker's YAML. Empty: g1_perception's conveyor configuration "
             "(object_tracker_conveyor2.yaml with world:=conveyor2, "
-            "object_tracker_conveyor_flat.yaml with world:=conveyor_flat).",
+            "object_tracker_conveyor_flat.yaml with world:=conveyor_flat or conveyor_fixed).",
         ),
         DeclareLaunchArgument(
             "activate_arm",

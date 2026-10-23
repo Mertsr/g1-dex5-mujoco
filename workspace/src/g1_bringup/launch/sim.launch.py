@@ -166,7 +166,8 @@ def _launch_setup(context, *args, **kwargs):
     # the geometry test wants both at once (a known robot pose in a known room).
     world = LaunchConfiguration("world").perform(context)
     if world not in (
-        "navigation", "perception", "manipulation", "lio", "conveyor", "conveyor2", "conveyor_flat"
+        "navigation", "perception", "manipulation", "lio", "conveyor", "conveyor2", "conveyor_flat",
+        "conveyor_fixed",
     ):
         raise RuntimeError(
             f"world:={world!r} is not a scene. Use 'navigation' (the multi-room facility), "
@@ -176,8 +177,10 @@ def _launch_setup(context, *args, **kwargs):
             "against a known 5 m square), 'conveyor' (Mert's own world: a table, a "
             "conveyor belt, and three parts, with no pinned/perception variant of its own), "
             "'conveyor2' (the same world with a red drink can standing in for each BSH "
-            "panel), or 'conveyor_flat' (the same world with the panels on a plain table, "
-            "no tray rim or stop bars, as on the real line)."
+            "panel), 'conveyor_flat' (the same world with the panels on a plain table, "
+            "no tray rim or stop bars, as on the real line), or 'conveyor_fixed' "
+            "(conveyor_flat with a hand that closes on a panel holding it fixed, SIMULATION "
+            "ONLY, see g1_bringup/tools/make_conveyor_fixed_scene.py)."
         )
     if sensors:
         suffix       = "_pinned" if pin_pelvis else ""
@@ -482,7 +485,11 @@ def generate_launch_description():
                 "Mert's own world: a table, a conveyor belt, and three parts. 'conveyor2' is "
                 "the same world with drink cans for the panels (g1_bringup/tools/make_conveyor2_scene.py). "
                 "'conveyor_flat' is the same world with the panels on a plain table, no tray rim or "
-                "stop bars (g1_bringup/tools/make_conveyor_flat_scene.py): what the panel scoop needs.",
+                "stop bars (g1_bringup/tools/make_conveyor_flat_scene.py): what the panel scoop needs. "
+                "'conveyor_fixed' is conveyor_flat with grasp welds on the panels: a hand that "
+                "closes on one holds it fixed until it opens, standing in for the real hand's grip "
+                "(g1_bringup/tools/make_conveyor_fixed_scene.py; needs the simulator rebuilt with "
+                "this repo's grasp_weld.cc).",
             ),
             DeclareLaunchArgument(
                 "rviz",
