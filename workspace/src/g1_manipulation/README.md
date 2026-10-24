@@ -274,7 +274,13 @@ result:
   ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_4, arm: auto}" --feedback
   ```
 
-  The next panel goes to `pallet/slot/nest_3` from the same stance. `carry_nest` holds the panel
+  The next panel goes to `pallet/slot/nest_3` from the same stance. A posture taken while a hand holds a
+  part (`carry_nest` after the pick) that cannot be planned is retried once with the held part
+  -- not the arm -- allowed to touch the octomap: the head camera sees a part held up in front of
+  it, and its depth lands in the octomap around the part's own box. `go_to_stance.py` stops
+  short when the walk stalls: inside `--accept` (8 cm, 6 degrees) and no nearer for `--stall`
+  (4 s), it stops there and says how far off it is; the isaaclab walker steps in place rather
+  than creep the last few cm at the 0.06 m/s floor. `carry_nest` holds the panel
   13 cm above nest_4, its underside over the rails, the nests' cradles and a panel already in
   nest_4, so the walk in brings it over the pallet. A place into a slot clears and refills the
   octomap first (it is kept in the pelvis frame, so after the walk it holds the tray's ghosts)

@@ -163,6 +163,10 @@ class GoToStance(Node):
         tol, tyaw = a.tol, math.radians(a.tol_yaw_deg)
         inside_since, last_log = None, 0.0
         deadline = time.monotonic() + a.timeout
+        # Stall watch: the gait does not creep. Commanded the 0.06 m/s floor a few cm short of the
+        # stance, the isaaclab walker steps in place and the error stays put (seen at 5-6 cm, for
+        # minutes). Once inside --accept and no nearer by 5 mm for --stall s, it stops there.
+        best, best_at = float("inf"), time.monotonic()
         while rclpy.ok():
             if time.monotonic() > deadline:
                 self.stop()
@@ -175,6 +179,21 @@ class GoToStance(Node):
                 continue
             e = self.errors(p, target)
             dist, ex, ey, eyaw, bearing = e
+            if dist < best - 0.005:
+                best, best_at = dist, time.monotonic()
+            if (
+                dist <= a.accept
+                and abs(eyaw) <= math.radians(max(a.tol_yaw_deg, a.accept_yaw_deg))
+                and time.monotonic() - best_at > a.stall
+            ):
+                self.stop()
+                self.report(e, "stopped: no nearer for %.0f s; " % a.stall)
+                self.get_logger().warn(
+                    "stopped %.1f cm off the stance: the gait does not step any closer from here "
+                    "(inside --accept %.0f cm, which the picks and places from the stances tolerate)"
+                    % (100.0 * dist, 100.0 * a.accept)
+                )
+                return True
             t = Twist()
             if dist > a.near:
                 # Far: face the stance and walk to it, steering; sideways only near it.
@@ -230,6 +249,14 @@ def main():
     p.add_argument("--max-speed-far", type=float, default=0.30, help="m/s further away")
     p.add_argument("--max-turn", type=float, default=0.40, help="rad/s")
     p.add_argument("--settle", type=float, default=2.0, help="s inside tolerance to finish")
+    p.add_argument(
+        "--accept",
+        type=float,
+        default=0.08,
+        help="m: stop here if the walk stalls (no nearer for --stall s) this close",
+    )
+    p.add_argument("--accept-yaw-deg", type=float, default=6.0, help="heading for --accept, degrees")
+    p.add_argument("--stall", type=float, default=4.0, help="s without getting nearer that is a stall")
     p.add_argument("--timeout", type=float, default=180.0, help="s for the walk")
     p.add_argument("--base-frame", default="base_footprint")
     a = p.parse_args()

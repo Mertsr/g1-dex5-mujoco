@@ -3496,7 +3496,39 @@ void G1ManipulationServer::executeSetArmPosture(
         goal_handle->abort(result);
         return;
     }
-    if (!moveToNamed(*group, goal->named_target))
+    bool reached = moveToNamed(*group, goal->named_target);
+    // An arm holding a part (a carry posture after a pick): the part is the robot's to the
+    // octomap's self filter only as far as its attached box goes, and the depth of a part held
+    // up in front of the head camera is inserted around it anyway. A posture that moves it a few
+    // cm then starts or ends "in" its own voxels, and stays there after the octomap is cleared
+    // and refilled. As the pick's lift does, the held part (not the arm) may touch the octomap
+    // for this one move -- only after the plain plan has failed, and only for that part.
+    std::string held;
+    ArmContext  arm;
+    const std::string side = goal->group.rfind("left_", 0) == 0 ? "left" :
+                             goal->group.rfind("right_", 0) == 0 ? "right" : "";
+    if (!reached && !side.empty() && resolveArm(side, arm))
+    {
+        for (const auto& [id, body] : planning_scene_.getAttachedObjects())
+        {
+            if (body.link_name == arm.palm_link)
+            {
+                held = id;
+            }
+        }
+        if (!held.empty())
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "'%s': retrying with the held '%s' allowed to touch the octomap (its own depth)",
+                goal->named_target.c_str(),
+                held.c_str());
+            allowHandContact(arm, { "<octomap>", held }, true, /*include_links=*/false);
+            reached = moveToNamed(*group, goal->named_target);
+            allowHandContact(arm, { "<octomap>", held }, false, /*include_links=*/false);
+        }
+    }
+    if (!reached)
     {
         result->success = false;
         result->message = "could not reach '" + goal->named_target + "'";
@@ -3505,7 +3537,8 @@ void G1ManipulationServer::executeSetArmPosture(
     }
 
     result->success = true;
-    result->message = goal->group + " is at " + goal->named_target;
+    result->message = goal->group + " is at " + goal->named_target +
+                      (held.empty() ? std::string() : " (holding " + held + ")");
     goal_handle->succeed(result);
 }
 
