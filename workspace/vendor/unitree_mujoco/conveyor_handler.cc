@@ -94,6 +94,10 @@ struct Pallet
     std::vector<int> nest_sites;  // [0] = conveyor_nest_1, the downstream end
     int    station_site = -1;
     int    robot_root   = -1;  // root body of the robot, to tell "placed" from "still held"
+    // Scene-local (MJCF <custom><numeric name="conveyor_pallet_hold_until_full" data="1"/>):
+    // the pallet stays where it starts while the robot fills every nest in place, and runs to
+    // the belt's end only once all of them hold a panel. Absent or 0: indexed one nest at a time.
+    bool   hold_until_full = false;
 
     // Runtime state, all in simulation time.
     std::size_t station_nest = 0;  // index into nest_sites currently at the station
@@ -278,10 +282,14 @@ void resolvePallet(const mjModel* model, Pallet& p)
     p.station_site = station;
     const int pelvis = mj_name2id(model, mjOBJ_BODY, "pelvis");
     p.robot_root     = pelvis >= 0 ? model->body_rootid[pelvis] : -1;
+    const int hold   = mj_name2id(model, mjOBJ_NUMERIC, "conveyor_pallet_hold_until_full");
+    p.hold_until_full =
+        hold >= 0 && model->numeric_size[hold] > 0 && model->numeric_data[model->numeric_adr[hold]] != 0.0;
     p.present        = true;
     std::fprintf(
-        stderr, "[grove_g1] conveyor pallet: %zu nests, travel 0..%.3f m\n", p.nest_sites.size(),
-        p.q_max);
+        stderr, "[grove_g1] conveyor pallet: %zu nests, travel 0..%.3f m, %s\n", p.nest_sites.size(),
+        p.q_max,
+        p.hold_until_full ? "held in place until every nest is filled" : "indexed nest by nest");
 }
 
 // True if `world_pos` lies inside site `site`'s box (sites are generated as boxes).
@@ -301,12 +309,11 @@ bool insideSite(const mjModel* m, const mjData* d, int site, const double world_
     return true;
 }
 
-// Is a free body sitting in the station nest, at rest, with no robot geom touching it?
-bool stationNestFilled(
-    const mjModel* m, const mjData* d, const Pallet& p, const std::vector<Draggable>& bodies,
-    const Config& cfg)
+// Is a free body sitting in nest site `site`, at rest, with no robot geom touching it?
+bool nestFilled(
+    const mjModel* m, const mjData* d, const Pallet& p, int site,
+    const std::vector<Draggable>& bodies, const Config& cfg)
 {
-    const int site = p.nest_sites[p.station_nest];
     for (const Draggable& body : bodies)
     {
         if (!insideSite(m, d, site, d->xpos + 3 * body.body_id))
@@ -355,9 +362,39 @@ void tickPallet(const mjModel* m, mjData* d, Pallet& p, const std::vector<Dragga
     }
     p.last_time = t;
 
-    if (!p.moving && !p.finished)
+    if (!p.moving && !p.finished && p.hold_until_full)
     {
-        if (stationNestFilled(m, d, p, bodies, cfg))
+        // Every nest filled, at rest and let go, for settle_s: then off to the belt's end.
+        bool all = true;
+        for (const int site : p.nest_sites)
+        {
+            all = all && nestFilled(m, d, p, site, bodies, cfg);
+        }
+        if (!all)
+        {
+            p.settled_since = -1.0;
+        }
+        else if (p.settled_since < 0.0)
+        {
+            p.settled_since = t;
+        }
+        else if (t - p.settled_since >= cfg.pallet_settle_s)
+        {
+            p.q0       = p.hold_q;
+            p.q1       = p.q_max;
+            p.finished = true;
+            p.duration = std::max(0.5, 1.875 * std::abs(p.q1 - p.q0) / cfg.pallet_speed_mps);
+            p.t0       = t;
+            p.moving   = true;
+            p.settled_since = -1.0;
+            std::fprintf(
+                stderr, "[grove_g1] pallet: all %zu nests filled, running to the end\n",
+                p.nest_sites.size());
+        }
+    }
+    else if (!p.moving && !p.finished)
+    {
+        if (nestFilled(m, d, p, p.nest_sites[p.station_nest], bodies, cfg))
         {
             if (p.settled_since < 0.0)
             {

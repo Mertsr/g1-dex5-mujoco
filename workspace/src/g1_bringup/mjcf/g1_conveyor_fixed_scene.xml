@@ -890,13 +890,14 @@
          one of its own. -->
     <camera name="d435i" mode="fixed" fovy="58" resolution="848 480" pos="0 0 1"/>
   </worldbody>
-  <!-- conveyor_fixed: grasp welds for the panels. See tools/make_conveyor_fixed_scene.py. -->
+  <!-- conveyor_fixed: grasp welds for the panels, the pallet held until full. See tools/make_conveyor_fixed_scene.py. -->
   <custom>
     <numeric name="grasp_weld_require_contact" data="1"/>
     <numeric name="grasp_weld_capture_radius" data="0.45"/>
     <numeric name="grasp_weld_close_fraction" data="0.35"/>
     <numeric name="grasp_weld_release_fraction" data="0.2"/>
     <numeric name="grasp_weld_second_timeconst" data="0.1"/>
+    <numeric name="conveyor_pallet_hold_until_full" data="1"/>
   </custom>
   <equality>
     <!-- Inactive; only grove-g1's grasp_weld manager turns one on. SIMULATION ONLY. -->

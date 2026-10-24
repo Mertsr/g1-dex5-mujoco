@@ -347,6 +347,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // where it is not, and missing where it is. Every pick therefore starts from a cleared map
     // and waits this long for the LiDAR and the depth camera to fill it from where it stands.
     pick_octomap_refill_s_ = declare_parameter<double>("pick_octomap_refill_s", 2.5);
+    place_octomap_refill_s_ = declare_parameter<double>("place_octomap_refill_s", 2.5);
     // A scoop also puts the table itself into the planning scene, as a box, independently of
     // the octomap: its top scoop_surface_margin_m below the table (so the part lying on it
     // and the hand's collision hulls in their scoop pose -- coarser than the hand itself, and
@@ -3071,6 +3072,15 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     const auto         slot_at  = name.find("/slot/");
     const bool         is_slot  = slot_at != std::string::npos;
     const std::string  owner_id = is_slot ? name.substr(0, slot_at) : name;
+    // Into a slot (a pallet's nest), the robot has usually walked there with the part: the
+    // octomap is kept in the pelvis frame, so what it holds is the tray's surroundings carried
+    // along -- ghosts in front of the robot at the pallet. Cleared and refilled from where it now
+    // stands, as the pick does; the held part is the robot's to the self filter, so it is not
+    // inserted. Other targets plan against the octomap as it is, as before.
+    if (is_slot)
+    {
+        refreshOctomap(place_octomap_refill_s_);
+    }
     const auto resolve = [&]() -> std::optional<std::pair<geometry_msgs::msg::Pose, geometry_msgs::msg::Pose>> {
         const auto detection = lookUpObject(owner_id);
         if (!detection)
@@ -3188,9 +3198,16 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     goal_handle->publish_feedback(feedback);
     // In two hands the pair goes together, straight in joint space: no plan for both_arms to a
     // pair of poses here, so keep the carry short (walk there first, then place).
+    // Into a slot, held at a grasp, in one hand: a straight line there first, planned only if the
+    // line is blocked. The part is usually carried near the pallet already (carry_nest), and a
+    // planned path between two nearby poses can swing it a long way round: going from above
+    // nest_4 to above nest_3 (15 cm), one swung the panel over the robot's head, into its torso,
+    // and it was dropped. Other targets keep the planned move as before.
+    const bool straight_first = is_slot && grasp_T_object && !support_arm;
     if (!(support_arm ?
               moveBothTo(arm, preplace, support, support_at(preplace), "preplace in two hands") :
-              moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
+              (straight_first && moveLinear(*arm_group, preplace, arm.grasp_frame, "preplace, straight")) ||
+                  moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
     {
         fail(Place::Feedback::PHASE_PREPLACE, "could not reach the pose above the target");
         return;

@@ -12,3 +12,24 @@ stances:
   # Its middle: 32 cm back from the table's edge. 4 cm nearer or further back it was hit and miss
   # (the arm folds into the torso at the scoop's start nearer; out of reach further).
   panel_1: {x: 1.08, y: -0.80, yaw_deg: 5.0, frame: odom}
+
+  # conveyor_fixed, the pallet route (left hand). The first panel picked in the LEFT hand at its
+  # usual scoop (scoop_left_near; Pick arm "left", hands 1): the pelvis 10 cm to the right of
+  # panel_1, turned 10 degrees right, so the grasp is straight ahead of the left shoulder.
+  panel_1_left: {x: 1.06, y: -0.90, yaw_deg: -10.0, frame: odom}
+
+  # In front of the pallet at the belt's start (the pallet held there until it is full, see
+  # make_conveyor_fixed_scene.py), facing along the belt: the two nests nearest the robot, nest_4
+  # and nest_3, from here without moving. A panel seated in a nest lies across the belt with the
+  # edge the scoop holds facing the belt's start, as it lies on the tray facing the robot -- so
+  # the hand comes at it the same way. Checked with move_group's IK on the URDF over a grid of
+  # stances (both nests and 8 cm above each, no self-collision): this is the middle of the stances
+  # that reach both; 5 cm nearer, the hand could not slide fully out from under the set-down panel
+  # (the arm folds back too far). Take carry_nest (SetArmPosture left_arm) before walking here.
+  pallet_end_left: {x: -0.50, y: 0.42, yaw_deg: 0.0, frame: odom}
+
+  # On the way to pallet_end_left: beside the belt's start, clear of its near corner (the leg at
+  # x -0.15, y 0.26). go_to_stance.py walks straight, so going from the tray to pallet_end_left
+  # directly would cut that corner; from here the last 0.4 m is a short sidestep with the panel
+  # (carried at 0.92 m) passing over the near rail (0.85).
+  pallet_approach_left: {x: -0.65, y: 0.00, yaw_deg: 0.0, frame: odom}

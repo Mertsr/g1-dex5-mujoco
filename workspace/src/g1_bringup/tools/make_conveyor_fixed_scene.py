@@ -24,6 +24,12 @@ other world keeps grasp_weld's sim_sensors.yaml settings:
                                     a soft weld (MuJoCo solref time constant, s; default 0.02):
                                     two rigid welds would lock the arms into one closed chain
                                     and their tracking errors would fight
+  conveyor_pallet_hold_until_full 1 the pallet stays where it starts (nest 1 at the load
+                                    station, filled by part_drop_test as the scene settles) while
+                                    the robot fills nest 2, 3 and 4 in place, walking to each;
+                                    once every nest holds a panel it runs to the belt's end.
+                                    conveyor_flat indexes one nest at a time instead
+                                    (conveyor_handler.cc)
 """
 import pathlib
 import re
@@ -39,6 +45,7 @@ SETTINGS = {
     "grasp_weld_close_fraction": 0.35,
     "grasp_weld_release_fraction": 0.2,
     "grasp_weld_second_timeconst": 0.1,
+    "conveyor_pallet_hold_until_full": 1,
 }
 
 
@@ -64,7 +71,7 @@ def main():
         for side in ("right", "left")
     )
     tail = (
-        "  <!-- conveyor_fixed: grasp welds for the panels. See tools/make_conveyor_fixed_scene.py. -->\n"
+        "  <!-- conveyor_fixed: grasp welds for the panels, the pallet held until full. See tools/make_conveyor_fixed_scene.py. -->\n"
         f"  <custom>\n{custom}\n  </custom>\n"
         "  <equality>\n"
         "    <!-- Inactive; only grove-g1's grasp_weld manager turns one on. SIMULATION ONLY. -->\n"

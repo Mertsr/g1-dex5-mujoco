@@ -332,6 +332,7 @@ private:
     /// reaches): `up_` is the world's vertical in the planning frame, from TF's gravity_frame_
     /// (odom), refreshed at the start of every pick and place.
     double pick_octomap_refill_s_{ 2.5 };
+    double place_octomap_refill_s_{ 2.5 };
     double scoop_surface_below_grasp_m_{ 0.095 };
     double scoop_surface_margin_m_{ 0.02 };
     double scoop_surface_front_m_{ 0.12 };

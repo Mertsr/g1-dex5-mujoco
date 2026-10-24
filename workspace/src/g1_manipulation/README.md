@@ -257,6 +257,35 @@ result:
 
   Place needs nothing: it sets the part down with however many hands hold it.
 
+  **Into the pallet's nests (world:=conveyor_fixed, left hand).** In conveyor_fixed the pallet
+  stays at the belt's start until every nest holds a panel (nest_1 is filled by the scene's
+  drop-test panel), so the robot fills the two nests nearest the belt's start, nest_4 and nest_3,
+  from one stance in front of the pallet, facing along the belt. A panel seated there lies with
+  the edge a scoop holds facing the robot, as on the tray, so the left hand's usual scoop takes it
+  in and sets it down the same way:
+
+  ```bash
+  ros2 run g1_manipulation ready_arms.py
+  ros2 run g1_manipulation go_to_stance.py panel_1_left
+  ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: left, hands: 1}" --feedback
+  ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: carry_nest}" --feedback
+  ros2 run g1_manipulation go_to_stance.py pallet_approach_left
+  ros2 run g1_manipulation go_to_stance.py pallet_end_left
+  ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_4, arm: auto}" --feedback
+  ```
+
+  The next panel goes to `pallet/slot/nest_3` from the same stance. `carry_nest` holds the panel
+  13 cm above nest_4, its underside over the rails, the nests' cradles and a panel already in
+  nest_4, so the walk in brings it over the pallet. A place into a slot clears and refills the
+  octomap first (it is kept in the pelvis frame, so after the walk it holds the tray's ghosts)
+  and goes to the pose above the nest in a straight line before it plans; other places are as
+  before. In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
+  nest_4 empty, then nest_3 with nest_4 already filled, each set down 11-13 mm and 5-7 degrees
+  from the nest's pose and let go; where the left pick at the tray went through (it missed in 2
+  of 4 there, knocking the panel), the place went through every time. Needs the simulator
+  rebuilt with this repo's `workspace/vendor/unitree_mujoco/conveyor_handler.cc` for the pallet
+  to stay put.
+
   `ready_arms.py` puts both arms in the tucked posture (shoulder pitch 0.3, roll 0.2 outward,
   elbow 1.2) and both hands open, through the same controllers MoveIt executes on: the start
   the scoop's reach was checked from, and out of the table's and the lifting hand's way. Run it
