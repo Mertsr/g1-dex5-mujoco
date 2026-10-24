@@ -36,6 +36,7 @@
 #include <vector>
 #include <vision_msgs/msg/detection3_d_array.hpp>
 
+#include "g1_sensor_relay/clock_offset.hpp"
 #include "g1_sensor_relay/frame_reader.hpp"
 
 namespace g1_sensor_relay
@@ -504,31 +505,17 @@ private:
      * proportional to angular rate. Standing it is invisible; walking, a pelvis swinging ~9
      * degrees per gait cycle turns 35 ms into degrees, and that lands on the floor plane.
      *
-     * sim_time_s is MuJoCo's own clock at the snapshot, so the only unknown is the constant
-     * offset between that clock and this one. Latency is never negative, so the smallest
-     * (arrival - sim_time) yet seen is the best estimate of it. The slow upward leak keeps one
-     * early sample from pinning the estimate forever once the two clocks drift apart, which
-     * they do whenever the simulator cannot hold real time.
+     * sim_time_s is MuJoCo's own clock at the snapshot, so the unknown is the offset between
+     * that clock and this one: the smallest (arrival - sim_time) over the last quarter second
+     * (ClockOffset). It used to be the smallest ever seen, leaking up 0.1 ms per frame, which
+     * follows a simulator slower than real time only up to 2%: slower than that (walking with a
+     * panel in hand), every stamp fell further into the past, 90 s after a few minutes, and the
+     * tracker could no longer transform its frames.
      */
     rclcpp::Time stampFor(double sim_time_s)
     {
         const rclcpp::Time arrival = now();
-        const double       delta   = arrival.seconds() - sim_time_s;
-
-        if (!have_clock_offset_ || delta < clock_offset_)
-        {
-            clock_offset_      = delta;
-            have_clock_offset_ = true;
-        }
-        else
-        {
-            // Roughly 20 ms per second at the IMU rate this now runs at, which is fast enough
-            // to follow a drifting sim clock and still far slower than the latency being
-            // removed. The IMU frames also pin the estimate harder than the sweep ever did:
-            // they are sampled and sent in microseconds, so their arrival lag is close to the
-            // true clock offset, and the sweep gets back-dated by the right amount as a result.
-            clock_offset_ += 1.0e-4;
-        }
+        clock_offset_              = clock_offset_estimate_.update(arrival.seconds(), sim_time_s);
 
         const double stamped = sim_time_s + clock_offset_;
         // A frame cannot have been captured after it arrived. Clamping keeps a bad offset from
@@ -601,8 +588,8 @@ private:
     double      poll_hz_ = 500.0;
 
     /// Estimated offset from the simulator's clock to this node's, in seconds. See stampFor().
-    double clock_offset_      = 0.0;
-    bool   have_clock_offset_ = false;
+    ClockOffset clock_offset_estimate_;
+    double      clock_offset_ = 0.0;
 
     int                       listen_fd_ = -1;
     int                       client_fd_ = -1;

@@ -65,6 +65,9 @@ if(BUILD_TESTING)
   ament_add_gmock(test_frame_reader test/test_frame_reader.cpp)
   target_link_libraries(test_frame_reader frame_reader)
 
+  ament_add_gmock(test_clock_offset test/test_clock_offset.cpp)
+  target_include_directories(test_clock_offset PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
   ament_add_gmock(test_livox_custom_msg test/test_livox_custom_msg.cpp)
   target_link_libraries(test_livox_custom_msg livox_custom_msg)
   # The wire-format drift check reads both copies of sensor_frame.h by relative path.
