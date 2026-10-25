@@ -247,6 +247,12 @@ private:
     void usePinchFrame(ArmContext& arm);
     bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
     bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
+    /// To @p pose for @p link through the collision-free IK solution nearest the arm's current
+    /// joints (seeded from them, then from them jittered), in joint space -- never one more than
+    /// near_ik_max_change_rad away in any joint, which would mean turning the arm round.
+    bool moveNearIk(
+        MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+        const std::string& what);
     /// Both arms at once, each to its own pose for its grasp frame: IK for each (seeded where it
     /// is), then one trajectory for both_arms, straight in joint space and timed together. For
     /// the short moves of a part held in two hands (a lift, a lower), which neither arm may make
@@ -277,6 +283,8 @@ private:
     double reaim_max_shift_m_{ 0.04 };  ///< how far a part may move before the descent and still be followed
     double linear_min_fraction_{ 0.95 };
     double linear_jump_threshold_{ 2.0 };
+    double near_ik_max_change_rad_{ 1.2 };
+    double held_check_m_{ 0.12 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
     double grasp_tilt_step_rad_{ M_PI / 12 };

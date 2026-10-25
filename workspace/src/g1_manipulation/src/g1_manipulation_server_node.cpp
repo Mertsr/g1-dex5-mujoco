@@ -8,6 +8,7 @@
 #include <tf2/LinearMath/Vector3.h>
 
 #include <algorithm>
+#include <random>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -335,6 +336,11 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // line whose IK turns the wrist over half-way is not a straight line for the part -- it
     // swung a panel past the robot's head. computeCartesianPath's relative jump threshold.
     linear_jump_threshold_ = declare_parameter<double>("linear_jump_threshold", 2.0);
+    // moveNearIk(): the most any one joint may turn to reach a pose the straight line could not.
+    near_ik_max_change_rad_ = declare_parameter<double>("near_ik_max_change_rad", 1.2);
+    // Place: how far the tracked part may be from where the hand holds it before the place
+    // decides the part is no longer in the hand.
+    held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
     // A published grasp is tried turned about its closing axis by up to this much, in these
     // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
     // by at least grasp_min_descent (the z of the approach direction) are kept.
@@ -1386,6 +1392,71 @@ bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::st
         return false;
     }
     return true;
+}
+
+bool G1ManipulationServer::moveNearIk(
+    MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+    const std::string& what)
+{
+    const std::vector<std::string> names  = group.getActiveJoints();
+    const std::vector<double>      values = group.getCurrentJointValues();
+    std::map<std::string, double>  now;
+    for (std::size_t i = 0; i < names.size() && i < values.size(); ++i)
+    {
+        now[names[i]] = values[i];
+    }
+    std::mt19937                     rng(7);
+    std::normal_distribution<double> jitter(0.0, 0.25);
+    double                           best_change = 1e9;
+    std::map<std::string, double>    best;
+    for (int k = 0; k < 16; ++k)
+    {
+        std::map<std::string, double> seed = now;
+        if (k > 0)
+        {
+            for (auto& [name, value] : seed)
+            {
+                value += jitter(rng);
+            }
+        }
+        std::map<std::string, double> joints;
+        if (!hasIk(group.getName(), link, pose, &joints, 0.1, /*avoid_collisions=*/true, &seed).value_or(false))
+        {
+            continue;
+        }
+        double change = 0.0;
+        for (const auto& [name, value] : joints)
+        {
+            if (const auto it = now.find(name); it != now.end())
+            {
+                change = std::max(change, std::abs(value - it->second));
+            }
+        }
+        if (change < best_change)
+        {
+            best_change = change;
+            best        = joints;
+        }
+    }
+    if (best.empty())
+    {
+        RCLCPP_ERROR(get_logger(), "%s: no collision-free IK for the pose", what.c_str());
+        return false;
+    }
+    if (best_change > near_ik_max_change_rad_)
+    {
+        RCLCPP_ERROR(
+            get_logger(),
+            "%s: the nearest IK turns a joint %.2f rad (near_ik_max_change_rad %.2f): that is the arm "
+            "turning round, not reaching",
+            what.c_str(),
+            best_change,
+            near_ik_max_change_rad_);
+        return false;
+    }
+    RCLCPP_INFO(
+        get_logger(), "%s: to the nearest IK, %.2f rad at most in any joint", what.c_str(), best_change);
+    return moveToJoints(group, best, what);
 }
 
 bool G1ManipulationServer::moveBothTo(
@@ -3200,6 +3271,58 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     }
     auto [place_goal, preplace] = hand_goals(*target);
 
+    // Is the part still in the hand? MoveIt keeps it attached whatever happens to it, so a part
+    // knocked out of the hand on the way (a walk to the pallet with it held too low, into the
+    // nests' cradles) left a place reaching an empty hand to the nest. Where the tracker sees it,
+    // against where the hand holds it: too far apart and the place stops, and the part is
+    // detached so the next pick starts clean.
+    if (grasp_T_object && !held_id.empty())
+    {
+        if (const auto seen = lookUpObject(held_id))
+        {
+            const std::string f =
+                seen->header.frame_id.empty() ? objects_.header.frame_id : seen->header.frame_id;
+            if (const auto p = toPlanningFrame(seen->results.front().pose.pose, f))
+            {
+                tf2::Transform world_T_hand;
+                tf2::fromMsg(arm_group->getCurrentPose(arm.grasp_frame).pose, world_T_hand);
+                const tf2::Vector3 expected = (world_T_hand * *grasp_T_object).getOrigin();
+                const double       off =
+                    expected.distance(tf2::Vector3(p->position.x, p->position.y, p->position.z));
+                if (off > held_check_m_)
+                {
+                    moveit_msgs::msg::AttachedCollisionObject detach;
+                    detach.link_name        = arm.palm_link;
+                    detach.object.id        = held_id;
+                    detach.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+                    planning_scene_.applyAttachedCollisionObject(detach);
+                    moveit_msgs::msg::CollisionObject remove;
+                    remove.id        = held_id;
+                    remove.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+                    planning_scene_.applyCollisionObject(remove);
+                    {
+                        std::lock_guard<std::mutex> lock(held_mutex_);
+                        held_grasp_.erase(held_id);
+                        held_arm_.erase(held_id);
+                        held_release_.erase(held_id);
+                        held_yaw_free_.erase(held_id);
+                        held_scoop_.erase(held_id);
+                        held_support_arm_.erase(held_id);
+                        held_support_T_.erase(held_id);
+                        held_support_clamps_.erase(held_id);
+                    }
+                    fail(
+                        Place::Feedback::PHASE_PREPLACE,
+                        held_id + " is not in the hand: the camera sees it " +
+                            std::to_string(off).substr(0, 4) +
+                            " m from where the hand would hold it (dropped or knocked out on the "
+                            "way?). Detached; pick it again.");
+                    return;
+                }
+            }
+        }
+    }
+
     feedback->phase = Place::Feedback::PHASE_PREPLACE;
     goal_handle->publish_feedback(feedback);
     // In two hands the pair goes together, straight in joint space: no plan for both_arms to a
@@ -3216,13 +3339,14 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
               moveBothTo(arm, preplace, support, support_at(preplace), "preplace in two hands") :
           straight_only ?
               moveLinear(
-                  *arm_group, preplace, arm.grasp_frame, "preplace, straight", linear_jump_threshold_) :
+                  *arm_group, preplace, arm.grasp_frame, "preplace, straight", linear_jump_threshold_) ||
+                  moveNearIk(*arm_group, arm.grasp_frame, preplace, "preplace, nearest IK") :
               moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
     {
         fail(
             Place::Feedback::PHASE_PREPLACE,
-            straight_only ? "the straight line to above the nest is blocked or the arm cannot follow "
-                            "it without turning the wrist over (see the log); nothing was swung" :
+            straight_only ? "neither a straight line nor a short joint move gets the hand above the "
+                            "nest from here (see the log): stand nearer or re-aim; nothing was swung" :
                             "could not reach the pose above the target");
         return;
     }
@@ -3552,18 +3676,71 @@ void G1ManipulationServer::executeSetArmPosture(
         {
             allowHandContact(rarm, { "<octomap>", rheld }, true, /*include_links=*/false);
         }
+        // Straight up; then up and drawn in toward the body (nearer the shoulder the arm reaches
+        // higher: from one pick's lift a straight 14 cm went only 6); then the same poses
+        // through the nearest IK, a short joint move. Never the arm turned round.
         const geometry_msgs::msg::Pose now = group->getCurrentPose(rarm.grasp_frame).pose;
-        const geometry_msgs::msg::Pose up  = raised(now, up_, cm / 100.0);
-        const bool ok = moveLinear(*group, up, rarm.grasp_frame, goal->named_target, linear_jump_threshold_);
+        tf2::Vector3 in(-now.position.x, -now.position.y, -now.position.z);  // toward the pelvis
+        in = in - up_ * in.dot(up_);
+        if (in.length() > 1e-6)
+        {
+            in.normalize();
+        }
+        std::vector<geometry_msgs::msg::Pose> targets;
+        for (const double back : { 0.0, 0.04, 0.08 })
+        {
+            geometry_msgs::msg::Pose t = raised(now, up_, cm / 100.0);
+            t.position.x += back * in.x();
+            t.position.y += back * in.y();
+            t.position.z += back * in.z();
+            targets.push_back(t);
+        }
+        bool ok = false;
+        for (std::size_t i = 0; i < targets.size() && !ok; ++i)
+        {
+            ok = moveLinear(*group, targets[i], rarm.grasp_frame, goal->named_target, linear_jump_threshold_);
+        }
+        for (std::size_t i = 0; i < targets.size() && !ok; ++i)
+        {
+            ok = moveNearIk(*group, rarm.grasp_frame, targets[i], goal->named_target + ", nearest IK");
+        }
+        // Still not: as high as a straight line does go, 2 cm at a time, and say how high. A
+        // part held lower than asked is better than one left where the pick put it; the caller
+        // decides whether that is high enough to walk with.
+        double reached_cm = ok ? cm : 0.0;
+        for (double h = cm - 2.0; !ok && h >= 2.0; h -= 2.0)
+        {
+            for (const double back : { 0.0, 0.04, 0.08 })
+            {
+                geometry_msgs::msg::Pose t = raised(now, up_, h / 100.0);
+                t.position.x += back * in.x();
+                t.position.y += back * in.y();
+                t.position.z += back * in.z();
+                if (moveLinear(*group, t, rarm.grasp_frame, goal->named_target + " (lower)", linear_jump_threshold_))
+                {
+                    reached_cm = h;
+                    break;
+                }
+            }
+            if (reached_cm > 0.0)
+            {
+                break;
+            }
+        }
         if (!rheld.empty())
         {
             allowHandContact(rarm, { "<octomap>", rheld }, false, /*include_links=*/false);
         }
         result->success = ok;
-        result->message = ok ? goal->group + " raised " + goal->named_target.substr(6) + " cm" +
-                                   (rheld.empty() ? std::string() : " holding " + rheld) :
-                               "could not raise the hand " + goal->named_target.substr(6) +
-                                   " cm in a straight line (see the log)";
+        result->message =
+            ok ? goal->group + " raised " + goal->named_target.substr(6) + " cm" +
+                     (rheld.empty() ? std::string() : " holding " + rheld) :
+            reached_cm > 0.0 ?
+                 "raised only " + std::to_string(static_cast<int>(reached_cm)) + " of " +
+                     goal->named_target.substr(6) +
+                     " cm: the arm goes no higher from this pose without turning round. Check the "
+                     "part clears the conveyor before walking there" :
+                 "could not raise the hand at all (see the log)";
         if (ok)
         {
             goal_handle->succeed(result);

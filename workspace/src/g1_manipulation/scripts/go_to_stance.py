@@ -233,6 +233,11 @@ class GoToStance(Node):
                     )
                 if turning:
                     t.angular.z = command(eyaw, a.gain_yaw, a.near_turn_floor, a.max_turn, 0.0)
+                elif -a.overshoot <= ex < 0.0:
+                    # A few cm past the stance: left there. Backwards the gait is strong (0.06 m/s
+                    # moved it 24 cm in 4 s, against 8 cm forwards), so correcting a small
+                    # overshoot put it further back each time and it never settled.
+                    t.linear.y = command(ey, a.gain, 0.06, a.max_speed, tol / math.sqrt(2.0))
                 else:
                     t.linear.x = command(
                         ex, a.gain, a.near_floor_x if ex > 0 else 0.06, a.max_speed, tol / math.sqrt(2.0)
@@ -289,6 +294,9 @@ def main():
     p.add_argument("--settle", type=float, default=2.0, help="s inside tolerance to finish")
     p.add_argument(
         "--near-floor-x", type=float, default=0.10, help="m/s: least forward command near the stance"
+    )
+    p.add_argument(
+        "--overshoot", type=float, default=0.04, help="m: past the stance by up to this, not walked back"
     )
     p.add_argument(
         "--near-turn-floor", type=float, default=0.2, help="rad/s: least turn once the position is in"
