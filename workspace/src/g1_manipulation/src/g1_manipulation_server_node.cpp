@@ -356,7 +356,7 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     own_limit_zone_rad_  = declare_parameter<double>("own_limit_zone_rad", 0.3);
     own_limit_margin_rad_ = declare_parameter<double>("own_limit_margin_rad", 0.05);
     // Place: how far the tracked part may be from where the hand holds it before the place
-    // decides the part is no longer in the hand.
+    // warns that the camera's part of that name is not the one in the hand (a warning only).
     held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
     // A published grasp is tried turned about its closing axis by up to this much, in these
     // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
@@ -3371,6 +3371,15 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     }
 
     std::string arm_name = goal->arm;
+    if (held_id.empty() && goal->surface_object_id.find("/slot/") != std::string::npos)
+    {
+        result->success = false;
+        result->message =
+            "nothing is held as far as this server knows (it was restarted since the pick, or an "
+            "earlier place let the part go): put the part back and pick it again";
+        goal_handle->abort(result);
+        return;
+    }
     if (arm_name == "auto")
     {
         arm_name = picked_with.empty() ? "right" : picked_with;
@@ -3570,11 +3579,11 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     }
     auto [place_goal, preplace] = hand_goals(*target);
 
-    // Is the part still in the hand? MoveIt keeps it attached whatever happens to it, so a part
-    // knocked out of the hand on the way (a walk to the pallet with it held too low, into the
-    // nests' cradles) left a place reaching an empty hand to the nest. Where the tracker sees it,
-    // against where the hand holds it: too far apart and the place stops, and the part is
-    // detached so the next pick starts clean.
+    // Is the part still in the hand? Only a warning: the tracker loses a part held in the hand
+    // (the hand hides most of it) and then fits its name to another one of the same kind -- a
+    // panel still on the tray, metres away -- so "far from the hand" does not mean "dropped".
+    // Detaching on that word left the server believing the hand empty with the panel in it,
+    // and the next place went nowhere.
     if (grasp_T_object && !held_id.empty())
     {
         if (const auto seen = lookUpObject(held_id))
@@ -3590,33 +3599,13 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
                     expected.distance(tf2::Vector3(p->position.x, p->position.y, p->position.z));
                 if (off > held_check_m_)
                 {
-                    moveit_msgs::msg::AttachedCollisionObject detach;
-                    detach.link_name        = arm.palm_link;
-                    detach.object.id        = held_id;
-                    detach.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
-                    planning_scene_.applyAttachedCollisionObject(detach);
-                    moveit_msgs::msg::CollisionObject remove;
-                    remove.id        = held_id;
-                    remove.operation = moveit_msgs::msg::CollisionObject::REMOVE;
-                    planning_scene_.applyCollisionObject(remove);
-                    {
-                        std::lock_guard<std::mutex> lock(held_mutex_);
-                        held_grasp_.erase(held_id);
-                        held_arm_.erase(held_id);
-                        held_release_.erase(held_id);
-                        held_yaw_free_.erase(held_id);
-                        held_scoop_.erase(held_id);
-                        held_support_arm_.erase(held_id);
-                        held_support_T_.erase(held_id);
-                        held_support_clamps_.erase(held_id);
-                    }
-                    fail(
-                        Place::Feedback::PHASE_PREPLACE,
-                        held_id + " is not in the hand: the camera sees it " +
-                            std::to_string(off).substr(0, 4) +
-                            " m from where the hand would hold it (dropped or knocked out on the "
-                            "way?). Detached; pick it again.");
-                    return;
+                    RCLCPP_WARN(
+                        get_logger(),
+                        "place: the camera's '%s' is %.2f m from where the %s hand holds it -- "
+                        "taken for the tracker naming another part; placing what the hand holds",
+                        held_id.c_str(),
+                        off,
+                        arm_name.c_str());
                 }
             }
         }
