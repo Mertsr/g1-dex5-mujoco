@@ -267,12 +267,19 @@ result:
   ```bash
   ros2 run g1_manipulation ready_arms.py
   ros2 run g1_manipulation go_to_stance.py panel_1_left
+  ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: work}" --feedback
   ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: left, hands: 1}" --feedback
   ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: raise_14}" --feedback
   ros2 run g1_manipulation go_to_stance.py pallet_approach_left
   ros2 run g1_manipulation place_in_nest.py nest_4
   ```
 
+  `work` puts the left arm in its work posture (`work_posture_left`): palm up in front, elbow up,
+  the shape the scoop picks the panel in and every later move keeps -- the arm's spare degree of
+  freedom is pulled toward it all along (`own_posture_gain`), so the arm never changes
+  configuration with the part in hand. Optional (the pick reaches the same shape from the tucked
+  arms) but quicker; refused while the hand holds something. `panel_1_left` faces the tray
+  square, like `pallet_end_left`, so the panel is held turned as the nests are.
   `place_in_nest.py` walks to `pallet_end_left` and places into the nest; when the place says the
   nest is out of the arm's reach from where the walk stopped, it walks to the stance the place
   names and places again (`--tries`, 3). The held part's arm configuration is fixed by the pick

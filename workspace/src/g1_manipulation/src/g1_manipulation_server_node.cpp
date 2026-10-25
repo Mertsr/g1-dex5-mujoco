@@ -364,6 +364,17 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     branch_rise_extra_m_  = declare_parameter<double>("branch_rise_extra_m", 0.14);
     // ... and that has the most room to move up there (branch_room_m each way).
     branch_room_m_ = declare_parameter<double>("branch_room_m", 0.08);
+    // The working arm's one posture (shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw): palm
+    // up, the hand in front at the height a scoop leaves the panel, elbow up -- the only family
+    // that reaches a part on the table without the arm passing through the body. A pick starts
+    // from it ("work" with SetArmPosture, or by itself), every move of a held part is a straight
+    // line of the hand, and the arm's spare degree of freedom is pulled back toward this posture
+    // all the way (own_posture_gain), so the arm keeps one shape and never changes configuration.
+    // Empty: no work posture for that arm (the pick picks an IK answer, as before).
+    work_posture_left_  = declare_parameter<std::vector<double>>(
+        "work_posture_left", std::vector<double>{ -2.01, 0.45, -2.04, -0.09, 1.52, -0.81, -0.70 });
+    work_posture_right_ = declare_parameter<std::vector<double>>("work_posture_right", std::vector<double>{ 0.0 });
+    own_posture_gain_   = declare_parameter<double>("own_posture_gain", 0.005);
     // A place into a nest that the held part cannot reach from here looks for the nearest stance
     // it can (within stance_search_m, up to 12 degrees turned; stance_search_tries / _s at most)
     // and says where that is in stance_frame, for go_to_stance.py.
@@ -1434,6 +1445,28 @@ bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& p
     return true;
 }
 
+std::optional<std::map<std::string, double>> G1ManipulationServer::workPosture(const std::string& group)
+{
+    const std::vector<double>& v = group.rfind("left", 0) == 0 ? work_posture_left_ : work_posture_right_;
+    MoveGroup* const           g = groupFor(group);
+    if (g == nullptr)
+    {
+        return std::nullopt;
+    }
+    const std::vector<std::string>& names =
+        g->getRobotModel()->getJointModelGroup(group)->getVariableNames();
+    if (v.size() != names.size())
+    {
+        return std::nullopt;
+    }
+    std::map<std::string, double> out;
+    for (std::size_t i = 0; i < v.size(); ++i)
+    {
+        out[names[i]] = v[i];
+    }
+    return out;
+}
+
 bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints,
                                         const std::string& what)
 {
@@ -1491,6 +1524,8 @@ bool G1ManipulationServer::moveOwnLine(
         hi[i] = b.max_position_ - own_limit_margin_rad_;
     }
 
+    // The arm's work posture, if it has one: the spare degree of freedom pulls toward it.
+    const auto posture = workPosture(group.getName());
     // Forward kinematics of `link` in the model frame (the pelvis, the planning frame).
     moveit::core::RobotState work(*start);
     const auto fk = [&](const Eigen::VectorXd& q) {
@@ -1646,6 +1681,13 @@ bool G1ManipulationServer::moveOwnLine(
         // Null space: away from a joint limit, and only near one (within own_limit_zone_rad),
         // so elsewhere the arm keeps the shape it has and only the hand moves.
         Eigen::VectorXd z = Eigen::VectorXd::Zero(n);
+        if (posture)
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                z[i] = own_posture_gain_ * (posture->at(names[i]) - q[i]);
+            }
+        }
         for (std::size_t i = 0; i < n; ++i)
         {
             const double zone = own_limit_zone_rad_;
@@ -1760,6 +1802,10 @@ bool G1ManipulationServer::moveOwnLine(
         {
             *reached = done ? 1.0 : std::clamp(1.0 - (goal_p - last_p).norm() / total, 0.0, 1.0);
         }
+        if (!done)
+        {
+            last_own_why_ = why.empty() ? "no progress" : why;
+        }
         return done;
     }
     if (done)
@@ -1837,10 +1883,15 @@ bool G1ManipulationServer::moveOwnLine(
         }
     }
     RCLCPP_INFO(get_logger(),
-                "%s: %zu waypoints, %.0f%% of the line, the hand turned %.0f deg about the vertical, no joint "
-                "more than %.2f rad",
+                "%s: %zu waypoints, %.0f%% of the line, the hand turned %.0f deg about the vertical and tilted "
+                "%.0f deg, no joint more than %.2f rad",
                 what.c_str(), trajectory.getWayPointCount(), done ? 100.0 : 100.0 * frac,
-                std::abs(rot_log(end.rotation() * from.rotation().transpose()).dot(up)) * 180.0 / M_PI, travel);
+                std::abs(rot_log(end.rotation() * from.rotation().transpose()).dot(up)) * 180.0 / M_PI,
+                [&]() {
+                    const Eigen::Vector3d r = rot_log(end.rotation() * from.rotation().transpose());
+                    return (r - up * r.dot(up)).norm() * 180.0 / M_PI;
+                }(),
+                travel);
     const auto executed = group.execute(msg);
     if (executed != moveit::core::MoveItErrorCode::SUCCESS)
     {
@@ -4339,6 +4390,35 @@ void G1ManipulationServer::executeSetArmPosture(
         result->success = false;
         result->message = "'" + goal->group + "' is not a group this node drives";
         goal_handle->abort(result);
+        return;
+    }
+    // "work": the arm's work posture (work_posture_left / _right), palm up in front, where a
+    // pick starts. Only with nothing in that hand: a held part is never swung to a posture.
+    if (goal->named_target == "work")
+    {
+        const auto wp = workPosture(goal->group);
+        std::string held;
+        const std::string wside = goal->group.rfind("left", 0) == 0 ? "left_hand_palm_link" : "right_hand_palm_link";
+        for (const auto& [id, body] : planning_scene_.getAttachedObjects())
+        {
+            if (body.link_name == wside)
+            {
+                held = id;
+            }
+        }
+        result->success = wp && held.empty() && moveToJoints(*group, *wp, "work posture");
+        result->message = !wp             ? "'" + goal->group + "' has no work posture (work_posture_left/_right)" :
+                          !held.empty()   ? "the hand holds " + held + ": a held part is not swung to a posture" :
+                          result->success ? goal->group + " in the work posture" :
+                                            "could not reach the work posture (see the log)";
+        if (result->success)
+        {
+            goal_handle->succeed(result);
+        }
+        else
+        {
+            goal_handle->abort(result);
+        }
         return;
     }
     // "raise_<cm>": the hand straight up that far from wherever it is, turned as it is -- a

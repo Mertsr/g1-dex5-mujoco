@@ -247,6 +247,9 @@ private:
     void usePinchFrame(ArmContext& arm);
     bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
     bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
+    /// The work posture (work_posture_left / _right) of @p group's arm as joint values; empty if
+    /// that arm has none.
+    std::optional<std::map<std::string, double>> workPosture(const std::string& group);
     /// This node's own motion, no planner and no IK service: @p link to @p goal along the
     /// straight line, a few millimetres at a time, the joints moved by damped least squares on
     /// the hand's Jacobian -- continuous, so the arm can never jump to another configuration
@@ -328,6 +331,9 @@ private:
     std::string last_own_why_;        ///< why the last moveOwnLine stopped
     double branch_rise_extra_m_{ 0.14 };
     double branch_room_m_{ 0.08 };
+    std::vector<double> work_posture_left_;
+    std::vector<double> work_posture_right_;
+    double own_posture_gain_{ 0.005 };
     double stance_search_m_{ 0.14 };
     int    stance_search_tries_{ 400 };
     double stance_search_s_{ 20.0 };

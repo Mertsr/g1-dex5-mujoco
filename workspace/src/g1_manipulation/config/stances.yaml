@@ -15,8 +15,10 @@ stances:
 
   # conveyor_fixed, the pallet route (left hand). The first panel picked in the LEFT hand at its
   # usual scoop (scoop_left_near; Pick arm "left", hands 1): the pelvis 10 cm to the right of
-  # panel_1, turned 10 degrees right, so the grasp is straight ahead of the left shoulder.
-  panel_1_left: {x: 1.06, y: -0.90, yaw_deg: -10.0, frame: odom}
+  # panel_1, facing the tray square -- the same heading as pallet_end_left, so the panel is held
+  # turned as the nests are and the hand barely turns to set it down (2 degrees; turned 10
+  # degrees here, 12).
+  panel_1_left: {x: 1.06, y: -0.90, yaw_deg: 0.0, frame: odom}
 
   # In front of the pallet at the belt's start (the pallet held there until it is full, see
   # make_conveyor_fixed_scene.py), facing along the belt: the two nests nearest the robot, nest_4
