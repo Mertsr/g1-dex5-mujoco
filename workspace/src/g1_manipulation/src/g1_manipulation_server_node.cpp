@@ -337,7 +337,12 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // swung a panel past the robot's head. computeCartesianPath's relative jump threshold.
     linear_jump_threshold_ = declare_parameter<double>("linear_jump_threshold", 2.0);
     // moveNearIk(): the most any one joint may turn to reach a pose the straight line could not.
-    near_ik_max_change_rad_ = declare_parameter<double>("near_ik_max_change_rad", 1.2);
+    // moveNearIk() takes the collision-free solution nearest the arm's joints, however far: a
+    // 7-DOF arm that has to turn to get somewhere may, as long as nothing it carries touches
+    // anything on the way (the plan checks the held part against the robot and the octomap).
+    // Lower this to forbid big turns outright.
+    near_ik_max_change_rad_ = declare_parameter<double>("near_ik_max_change_rad", 6.3);
+    linear_max_joint_step_rad_ = declare_parameter<double>("linear_max_joint_step_rad", 0.25);
     // Place: how far the tracked part may be from where the hand holds it before the place
     // decides the part is no longer in the hand.
     held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
@@ -951,8 +956,37 @@ bool G1ManipulationServer::moveLinear(
     const std::string previous = group.getEndEffectorLink();
     group.setEndEffectorLink(link);
     moveit_msgs::msg::RobotTrajectory trajectory;
-    const double fraction =
-        group.computeCartesianPath({ pose }, 0.005, jump_threshold, trajectory, true);
+    double fraction = group.computeCartesianPath({ pose }, 0.005, 0.0, trajectory, true);
+    // Jump guard (jump_threshold > 0): no joint may turn more than linear_max_joint_step_rad
+    // between two 5 mm waypoints -- that is the IK changing arm configuration, the wrist turning
+    // over, not a straight line. Checked here rather than by computeCartesianPath's own relative
+    // threshold, which on short lines ("need at least 10 steps") cut paths at 3% that the arm
+    // could follow most of.
+    if (jump_threshold > 0.0)
+    {
+        auto& pts = trajectory.joint_trajectory.points;
+        for (std::size_t k = 1; k < pts.size(); ++k)
+        {
+            double step = 0.0;
+            for (std::size_t j = 0; j < pts[k].positions.size() && j < pts[k - 1].positions.size(); ++j)
+            {
+                step = std::max(step, std::abs(pts[k].positions[j] - pts[k - 1].positions[j]));
+            }
+            if (step > linear_max_joint_step_rad_)
+            {
+                RCLCPP_WARN(
+                    get_logger(),
+                    "%s: a joint turns %.2f rad between two waypoints at %.0f%% of the line (the arm "
+                    "changing configuration); the line stops there",
+                    what.c_str(),
+                    step,
+                    100.0 * fraction * static_cast<double>(k) / static_cast<double>(pts.size()));
+                fraction *= static_cast<double>(k - 1) / static_cast<double>(std::max<std::size_t>(pts.size() - 1, 1));
+                pts.resize(k);
+                break;
+            }
+        }
+    }
     group.setEndEffectorLink(previous);
     if (fraction < linear_min_fraction_)
     {
@@ -960,8 +994,7 @@ bool G1ManipulationServer::moveLinear(
         // between the waypoints) -- is the same call without the collision check.
         group.setEndEffectorLink(link);
         moveit_msgs::msg::RobotTrajectory unchecked;
-        const double free =
-            group.computeCartesianPath({ pose }, 0.005, jump_threshold, unchecked, false);
+        const double free = group.computeCartesianPath({ pose }, 0.005, 0.0, unchecked, false);
         group.setEndEffectorLink(previous);
         // What it runs into: the first waypoint of the unchecked line past where the checked one
         // stopped, checked against the scene.
@@ -1407,16 +1440,17 @@ bool G1ManipulationServer::moveNearIk(
     }
     std::mt19937                     rng(7);
     std::normal_distribution<double> jitter(0.0, 0.25);
+    std::uniform_real_distribution<double> wide(-3.0, 3.0);  // later seeds: anywhere
     double                           best_change = 1e9;
     std::map<std::string, double>    best;
-    for (int k = 0; k < 16; ++k)
+    for (int k = 0; k < 32; ++k)
     {
         std::map<std::string, double> seed = now;
         if (k > 0)
         {
             for (auto& [name, value] : seed)
             {
-                value += jitter(rng);
+                value = k < 16 ? value + jitter(rng) : wide(rng);
             }
         }
         std::map<std::string, double> joints;

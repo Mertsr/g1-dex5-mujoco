@@ -283,7 +283,8 @@ private:
     double reaim_max_shift_m_{ 0.04 };  ///< how far a part may move before the descent and still be followed
     double linear_min_fraction_{ 0.95 };
     double linear_jump_threshold_{ 2.0 };
-    double near_ik_max_change_rad_{ 1.2 };
+    double near_ik_max_change_rad_{ 6.3 };
+    double linear_max_joint_step_rad_{ 0.25 };
     double held_check_m_{ 0.12 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
