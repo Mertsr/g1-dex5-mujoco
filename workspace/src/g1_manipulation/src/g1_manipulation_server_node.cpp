@@ -8,7 +8,7 @@
 #include <tf2/LinearMath/Vector3.h>
 
 #include <algorithm>
-#include <random>
+#include <limits>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -336,13 +336,15 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // line whose IK turns the wrist over half-way is not a straight line for the part -- it
     // swung a panel past the robot's head. computeCartesianPath's relative jump threshold.
     linear_jump_threshold_ = declare_parameter<double>("linear_jump_threshold", 2.0);
-    // moveNearIk(): the most any one joint may turn to reach a pose the straight line could not.
-    // moveNearIk() takes the collision-free solution nearest the arm's joints, however far: a
-    // 7-DOF arm that has to turn to get somewhere may, as long as nothing it carries touches
-    // anything on the way (the plan checks the held part against the robot and the octomap).
-    // Lower this to forbid big turns outright.
-    near_ik_max_change_rad_ = declare_parameter<double>("near_ik_max_change_rad", 6.3);
+    // The most any joint may turn between two waypoints of a guarded straight line (5 mm
+    // apart) or two steps of moveStepwise() (1 cm apart): more is the arm changing
+    // configuration -- swinging what it holds -- not following the line. A joint move to a
+    // far IK solution swung a held panel past the robot's head and laid it behind the robot.
     linear_max_joint_step_rad_ = declare_parameter<double>("linear_max_joint_step_rad", 0.25);
+    stepwise_max_joint_step_rad_ = declare_parameter<double>("stepwise_max_joint_step_rad", 0.25);
+    // raise_<cm> and a place into a slot try a plain straight line before the stepwise path;
+    // false goes stepwise at once (the harness uses it to exercise that path).
+    carry_straight_first_ = declare_parameter<bool>("carry_straight_first", true);
     // Place: how far the tracked part may be from where the hand holds it before the place
     // decides the part is no longer in the hand.
     held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
@@ -1427,70 +1429,159 @@ bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::st
     return true;
 }
 
-bool G1ManipulationServer::moveNearIk(
-    MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
-    const std::string& what)
+bool G1ManipulationServer::moveStepwise(
+    MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
+    const std::string& what, double slack_deg, bool exact_end)
 {
-    const std::vector<std::string> names  = group.getActiveJoints();
-    const std::vector<double>      values = group.getCurrentJointValues();
-    std::map<std::string, double>  now;
-    for (std::size_t i = 0; i < names.size() && i < values.size(); ++i)
+    const moveit::core::RobotStatePtr start = group.getCurrentState();
+    if (start == nullptr)
     {
-        now[names[i]] = values[i];
-    }
-    std::mt19937                     rng(7);
-    std::normal_distribution<double> jitter(0.0, 0.25);
-    std::uniform_real_distribution<double> wide(-3.0, 3.0);  // later seeds: anywhere
-    double                           best_change = 1e9;
-    std::map<std::string, double>    best;
-    for (int k = 0; k < 32; ++k)
-    {
-        std::map<std::string, double> seed = now;
-        if (k > 0)
-        {
-            for (auto& [name, value] : seed)
-            {
-                value = k < 16 ? value + jitter(rng) : wide(rng);
-            }
-        }
-        std::map<std::string, double> joints;
-        if (!hasIk(group.getName(), link, pose, &joints, 0.1, /*avoid_collisions=*/true, &seed).value_or(false))
-        {
-            continue;
-        }
-        double change = 0.0;
-        for (const auto& [name, value] : joints)
-        {
-            if (const auto it = now.find(name); it != now.end())
-            {
-                change = std::max(change, std::abs(value - it->second));
-            }
-        }
-        if (change < best_change)
-        {
-            best_change = change;
-            best        = joints;
-        }
-    }
-    if (best.empty())
-    {
-        RCLCPP_ERROR(get_logger(), "%s: no collision-free IK for the pose", what.c_str());
+        RCLCPP_ERROR(get_logger(), "%s: no current state", what.c_str());
         return false;
     }
-    if (best_change > near_ik_max_change_rad_)
+    const moveit::core::JointModelGroup* const jmg = start->getJointModelGroup(group.getName());
+    const std::vector<std::string>&            names = jmg->getVariableNames();
+    std::vector<double>                        q;
+    start->copyJointGroupPositions(jmg, q);
+
+    const geometry_msgs::msg::Pose from = group.getCurrentPose(link).pose;
+    tf2::Vector3    p0(from.position.x, from.position.y, from.position.z);
+    tf2::Vector3    p1(goal.position.x, goal.position.y, goal.position.z);
+    tf2::Quaternion q0, q1;
+    tf2::fromMsg(from.orientation, q0);
+    tf2::fromMsg(goal.orientation, q1);
+    const double dist  = p0.distance(p1);
+    const double angle = q0.angleShortestPath(q1);
+    const int    steps = std::max(1, static_cast<int>(std::ceil(std::max(dist / 0.01, angle / 0.05))));
+
+    // Turns about the vertical a step may try, smallest first.
+    std::vector<double> turns{ 0.0 };
+    for (double d = 5.0; d <= slack_deg + 1e-9; d += 5.0)
     {
-        RCLCPP_ERROR(
-            get_logger(),
-            "%s: the nearest IK turns a joint %.2f rad (near_ik_max_change_rad %.2f): that is the arm "
-            "turning round, not reaching",
-            what.c_str(),
-            best_change,
-            near_ik_max_change_rad_);
+        turns.push_back(d * M_PI / 180.0);
+        turns.push_back(-d * M_PI / 180.0);
+    }
+
+    robot_trajectory::RobotTrajectory trajectory(start->getRobotModel(), group.getName());
+    trajectory.addSuffixWayPoint(*start, 0.0);
+    double turned = 0.0;  // the turn the last step took: the next starts from it
+    for (int k = 1; k <= steps; ++k)
+    {
+        const double  s = static_cast<double>(k) / steps;
+        tf2::Vector3  p = p0.lerp(p1, s);
+        tf2::Quaternion o = q0.slerp(q1, s);
+        bool          found = false;
+        int           n_noik = 0, n_collide = 0;
+        std::string   hit;  // what the first collision was with
+        double        min_jump = std::numeric_limits<double>::infinity();
+        std::vector<double> candidates = turns;
+        // Keep the turn the line had; then the others, nearest first.
+        std::stable_sort(candidates.begin(), candidates.end(), [turned](double a, double b) {
+            return std::abs(a - turned) < std::abs(b - turned);
+        });
+        if (exact_end && k == steps)
+        {
+            candidates = { 0.0 };
+        }
+        for (const double t : candidates)
+        {
+            tf2::Quaternion about;
+            about.setRotation(up_, t);
+            geometry_msgs::msg::Pose pose;
+            pose.position.x  = p.x();
+            pose.position.y  = p.y();
+            pose.position.z  = p.z();
+            pose.orientation = tf2::toMsg((about * o).normalized());
+            std::map<std::string, double> seed, joints;
+            for (std::size_t i = 0; i < names.size(); ++i)
+            {
+                seed[names[i]] = q[i];
+            }
+            if (!hasIk(group.getName(), link, pose, &joints, 0.05, /*avoid_collisions=*/true, &seed).value_or(false))
+            {
+                // Why: out of reach, or reachable only through a collision.
+                std::map<std::string, double> through;
+                if (hasIk(group.getName(), link, pose, &through, 0.05, /*avoid_collisions=*/false, &seed).value_or(false))
+                {
+                    ++n_collide;
+                    if (hit.empty())
+                    {
+                        for (const std::string& c : collisionsAt(group.getName(), through))
+                        {
+                            hit += (hit.empty() ? "" : ", ") + c;
+                        }
+                    }
+                }
+                else
+                {
+                    ++n_noik;
+                }
+                continue;
+            }
+            std::vector<double> next = q;
+            double              jump = 0.0;
+            for (std::size_t i = 0; i < names.size(); ++i)
+            {
+                if (const auto it = joints.find(names[i]); it != joints.end())
+                {
+                    next[i] = it->second;
+                }
+                jump = std::max(jump, std::abs(next[i] - q[i]));
+            }
+            if (jump > stepwise_max_joint_step_rad_)
+            {
+                min_jump = std::min(min_jump, jump);
+                continue;
+            }
+            q      = next;
+            turned = t;
+            found  = true;
+            break;
+        }
+        if (!found)
+        {
+            RCLCPP_ERROR(
+                get_logger(),
+                "%s: stopped at %.0f%% of the way: no collision-free step within %.2f rad of the arm's "
+                "joints%s (of %zu tries: %d out of reach, %d only through a collision [%s], the rest a "
+                "joint jump of at least %.2f rad)",
+                what.c_str(),
+                100.0 * (k - 1) / steps,
+                stepwise_max_joint_step_rad_,
+                slack_deg > 0.0 ? " even with the hand turned about the vertical" : "",
+                candidates.size(),
+                n_noik,
+                n_collide,
+                hit.c_str(),
+                std::isfinite(min_jump) ? min_jump : 0.0);
+            return false;
+        }
+        moveit::core::RobotState state(*start);
+        state.setJointGroupPositions(jmg, q);
+        state.update();
+        trajectory.addSuffixWayPoint(state, 0.0);
+    }
+    trajectory_processing::TimeOptimalTrajectoryGeneration totg;
+    if (!totg.computeTimeStamps(trajectory, velocity_scaling_, velocity_scaling_))
+    {
+        RCLCPP_ERROR(get_logger(), "%s: could not time the stepwise path", what.c_str());
         return false;
     }
+    moveit_msgs::msg::RobotTrajectory msg;
+    trajectory.getRobotTrajectoryMsg(msg);
     RCLCPP_INFO(
-        get_logger(), "%s: to the nearest IK, %.2f rad at most in any joint", what.c_str(), best_change);
-    return moveToJoints(group, best, what);
+        get_logger(),
+        "%s: %d steps, the hand turned %.0f deg about the vertical at the end",
+        what.c_str(),
+        steps,
+        turned * 180.0 / M_PI);
+    const auto executed = group.execute(msg);
+    if (executed != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(get_logger(), "%s: execution failed (%d)", what.c_str(), executed.val);
+        return false;
+    }
+    return true;
 }
 
 bool G1ManipulationServer::moveBothTo(
@@ -3361,29 +3452,44 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     goal_handle->publish_feedback(feedback);
     // In two hands the pair goes together, straight in joint space: no plan for both_arms to a
     // pair of poses here, so keep the carry short (walk there first, then place).
-    // Into a slot, held at a grasp, in one hand: a straight line there and nothing else, with
-    // the wrist kept from turning over on the way (linear_jump_threshold). The part is carried
-    // to the pallet already raised (raise_<cm>), so above the nest is a short line away; a
-    // planned path to it swung the panel a long way round -- over the robot's head, into its
-    // torso, dropped once -- and so did a straight line whose IK flipped the wrist half-way. If
-    // the line is blocked or the arm cannot follow it, the place stops there and says so: step
-    // closer or re-aim, rather than have the part swung about. Other targets plan as before.
+    // Into a slot, held at a grasp, in one hand: a straight line there, the wrist kept from
+    // turning over on the way (linear_jump_threshold); failing that, the same line in 1 cm
+    // steps (moveStepwise), the hand free to turn up to 20 degrees about the vertical and level
+    // again at the end. Nothing else: a planned path to it swung the panel a long way round --
+    // over the robot's head, into its torso, dropped once -- and so did a joint move to a far
+    // IK solution. If neither gets there the place stops and says so: step closer or re-aim,
+    // rather than have the part swung about. Other targets plan as before.
     const bool straight_only = is_slot && grasp_T_object && !support_arm;
+    // The hand round the held part is inside the camera's depth of that part: the hand (not the
+    // arm) may touch the octomap on this short move above the nest, or every step "collides".
+    if (straight_only)
+    {
+        allowHandContact(arm, touchables, true);
+    }
+    const auto end_hand_exemption = [&]() {
+        if (straight_only)
+        {
+            allowHandContact(arm, touchables, false);
+            allowHandContact(arm, touchables, true, /*include_links=*/false);
+        }
+    };
     if (!(support_arm ?
               moveBothTo(arm, preplace, support, support_at(preplace), "preplace in two hands") :
           straight_only ?
-              moveLinear(
-                  *arm_group, preplace, arm.grasp_frame, "preplace, straight", linear_jump_threshold_) ||
-                  moveNearIk(*arm_group, arm.grasp_frame, preplace, "preplace, nearest IK") :
+              (carry_straight_first_ &&
+               moveLinear(*arm_group, preplace, arm.grasp_frame, "preplace, straight", linear_jump_threshold_)) ||
+                  moveStepwise(*arm_group, arm.grasp_frame, preplace, "preplace, stepwise", 20.0, true) :
               moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
     {
+        end_hand_exemption();
         fail(
             Place::Feedback::PHASE_PREPLACE,
-            straight_only ? "neither a straight line nor a short joint move gets the hand above the "
+            straight_only ? "neither a straight line nor small steps get the hand above the "
                             "nest from here (see the log): stand nearer or re-aim; nothing was swung" :
                             "could not reach the pose above the target");
         return;
     }
+    end_hand_exemption();
 
     // Re-resolve before descending. Everything above was computed in the pelvis frame before the
     // arm reached out, and the reach moves the base: extending a loaded arm shifts the COM and
@@ -3509,7 +3615,9 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     // Now the hand may touch the surface: the descent ends in contact by definition.
     allowHandContact(arm, touchables, true);
     const double slot_jump = is_slot ? linear_jump_threshold_ : 0.0;
-    if (!lowered && !(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower", slot_jump) :
+    if (!lowered && !(grasp_T_object ? ((carry_straight_first_ || !is_slot) &&
+                                        moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower", slot_jump)) ||
+                                           (is_slot && moveStepwise(*arm_group, arm.grasp_frame, place_goal, "lower, stepwise", 0.0, true)) :
                                        moveTo(*arm_group, place_goal, arm.grasp_frame, "lower")))
     {
         fail(Place::Feedback::PHASE_LOWER, "could not lower onto the target");
@@ -3580,7 +3688,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     if (scooped)
     {
         const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_, up_);
-        if (!moveLinear(*arm_group, out, arm.grasp_frame, "slide out", slot_jump))
+        if (!((carry_straight_first_ || !is_slot) && moveLinear(*arm_group, out, arm.grasp_frame, "slide out", slot_jump)) &&
+            !(is_slot && moveStepwise(*arm_group, arm.grasp_frame, out, "slide out, stepwise", 0.0, true)))
         {
             fail(Place::Feedback::PHASE_RETREAT, "could not slide the hand out from under the part");
             return;
@@ -3708,11 +3817,14 @@ void G1ManipulationServer::executeSetArmPosture(
         // it starts inside the depth the camera took of it.
         if (!rheld.empty())
         {
-            allowHandContact(rarm, { "<octomap>", rheld }, true, /*include_links=*/false);
+            // The hand too: it is round the part, inside the same depth (a finger "in" the
+            // octomap failed every step up). The arm stays checked.
+            allowHandContact(rarm, { "<octomap>", rheld }, true);
         }
         // Straight up; then up and drawn in toward the body (nearer the shoulder the arm reaches
-        // higher: from one pick's lift a straight 14 cm went only 6); then the same poses
-        // through the nearest IK, a short joint move. Never the arm turned round.
+        // higher: from one pick's lift a straight 14 cm went only 6); then the same poses in
+        // 1 cm steps, no joint turning more than stepwise_max_joint_step_rad per step. Never the
+        // arm turned round.
         const geometry_msgs::msg::Pose now = group->getCurrentPose(rarm.grasp_frame).pose;
         tf2::Vector3 in(-now.position.x, -now.position.y, -now.position.z);  // toward the pelvis
         in = in - up_ * in.dot(up_);
@@ -3730,13 +3842,15 @@ void G1ManipulationServer::executeSetArmPosture(
             targets.push_back(t);
         }
         bool ok = false;
-        for (std::size_t i = 0; i < targets.size() && !ok; ++i)
+        for (std::size_t i = 0; i < targets.size() && !ok && carry_straight_first_; ++i)
         {
             ok = moveLinear(*group, targets[i], rarm.grasp_frame, goal->named_target, linear_jump_threshold_);
         }
+        // Step by step, the hand free to turn up to 20 degrees about the vertical (the part stays
+        // level) where its own orientation would take a joint past its limit.
         for (std::size_t i = 0; i < targets.size() && !ok; ++i)
         {
-            ok = moveNearIk(*group, rarm.grasp_frame, targets[i], goal->named_target + ", nearest IK");
+            ok = moveStepwise(*group, rarm.grasp_frame, targets[i], goal->named_target + ", stepwise", 20.0, false);
         }
         // Still not: as high as a straight line does go, 2 cm at a time, and say how high. A
         // part held lower than asked is better than one left where the pick put it; the caller
@@ -3763,7 +3877,7 @@ void G1ManipulationServer::executeSetArmPosture(
         }
         if (!rheld.empty())
         {
-            allowHandContact(rarm, { "<octomap>", rheld }, false, /*include_links=*/false);
+            allowHandContact(rarm, { "<octomap>", rheld }, false);
         }
         result->success = ok;
         result->message =

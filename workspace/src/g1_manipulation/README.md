@@ -281,9 +281,16 @@ result:
   whole arm round from a pick that ended in another arm configuration, panel and all, past the
   robot's head. A place into a slot clears and refills the octomap first (it is kept in the
   pelvis frame, so after the walk it holds the tray's ghosts), then goes to the pose above the
-  nest in a straight line only, the wrist kept from turning over on the way
-  (`linear_jump_threshold`, also on the way down and out): if that line is blocked it stops and
-  says so rather than plan the part round the robot. Other places are as before. A posture taken
+  nest, down into it and back out in straight lines, the wrist kept from turning over on the
+  way (`linear_jump_threshold`). Where a straight line cannot be followed (a joint at its limit,
+  the line blocked) the raise and the place go the same way in 1 cm steps: each step an IK
+  solution seeded with the last, collision-free with the held part included, and no joint
+  turning more than `stepwise_max_joint_step_rad` (0.25 rad) between two steps -- so the arm
+  never swings; the hand may turn up to 20 degrees about the vertical on the way (the panel
+  stays level) and is back at the nest's orientation for the descent. During the raise and the
+  move above the nest the holding hand (not the arm) may touch the octomap: the camera sees the
+  hand round the panel it holds. If neither way gets there it stops and says so rather than
+  plan the part round the robot. Other places are as before. A posture taken
   while a hand holds a part that cannot be planned is retried once with the held part allowed
   to touch the octomap (the head camera sees a part held up in front of it).
   `go_to_stance.py` walks the last 12 cm in small corrections, turning on the spot or stepping,
@@ -291,9 +298,12 @@ result:
   0.06 m/s forward), and stops where the walk stalls: inside `--accept` (10 cm, 8 degrees) for
   `--stall` (8 s), it stops and says how far off it is.
   In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
-  nest_4 empty, then nest_3 with nest_4 already filled, each set down 10-15 mm and 5-7 degrees
-  from the nest's pose and let go; where the left pick at the tray went through (it missed in 2
-  of 4 there, knocking the panel), the place went through every time. Needs the simulator
+  nest_4 empty, then nest_3 with nest_4 already filled, each set down 5-13 mm and 5-8 degrees
+  from the nest's pose and let go, the panel never touching the robot's body or head; also with
+  the straight lines switched off (`carry_straight_first: false`), the raise, the move above the
+  nest, the descent and the way out all in steps, the hand never turned. Where the left pick at
+  the tray went through (it misses about half the time there, knocking the panel), the place
+  went through every time. Needs the simulator
   rebuilt with this repo's `workspace/vendor/unitree_mujoco/conveyor_handler.cc` for the pallet
   to stay put.
 
