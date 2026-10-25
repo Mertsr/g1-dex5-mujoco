@@ -237,7 +237,8 @@ private:
     double                                               il_stand_height_{ 0.8 };
     double                                               il_walk_height_{ 0.72 };
     double                                               il_walk_height_hold_s_{ 1.0 };
-    double                                               il_height_rate_{ 5.0 };  // per second
+    double                                               il_height_rate_{ 5.0 };  // per second, down
+    double                                               il_stand_up_rate_{ 0.03 };  // per second, up
     double                                               il_rate_hz_{ 50.0 };
     std::optional<std::chrono::steady_clock::time_point> il_last_motion_{};
 };

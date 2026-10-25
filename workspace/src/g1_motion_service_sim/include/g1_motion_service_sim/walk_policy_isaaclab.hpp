@@ -219,7 +219,7 @@ std::array<float, kIlNumJoints> ilBuildFullAction(
 /**
  * @brief The height command for this tick: walk_height while the robot is being driven (and
  *        for hold_s after the last non-zero command), stand_height otherwise, approached at
- *        most max_step per tick.
+ *        most max_step per tick going down and max_step_up going up (max_step if not given).
  *
  * Why two heights (measured in MuJoCo against policy.onnx on this robot): at 0.8 the policy
  * stands with its knees almost straight (pelvis ~0.79 m). That stance is perfectly still, but
@@ -229,11 +229,17 @@ std::array<float, kIlNumJoints> ilBuildFullAction(
  * there it shuffles a few cm/s, which is no good next to a table. So: crouch the moment a
  * command arrives, stand back up once the robot has been stopped for hold_s.
  *
+ * Down fast, up slowly: the crouch has to be there by the first step, but standing back up at
+ * the same rate (5 m/s, i.e. in one tick) jerked the robot upright the moment it stopped --
+ * 0.84 m/s of pelvis lift and 1.7 rad/s of rocking in MuJoCo, enough to upset its balance with a
+ * panel in hand. At 0.03 m/s up (2.7 s from 0.72 to 0.8), with the stand reset held until it
+ * is fully up, 0.26 m/s and 0.86 rad/s.
+ *
  * @param seconds_since_motion seconds since the last non-zero command; negative for "never".
  */
 double ilCommandHeight(
     double current, double stand_height, double walk_height, double seconds_since_motion,
-    double hold_s, double max_step);
+    double hold_s, double max_step, double max_step_up = -1.0);
 
 }  // namespace g1_motion_service_sim
 

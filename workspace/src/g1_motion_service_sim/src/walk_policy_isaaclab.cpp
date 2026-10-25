@@ -68,7 +68,7 @@ std::array<float, kIlNumJoints> ilBuildFullAction(
 
 double ilCommandHeight(
     double current, double stand_height, double walk_height, double seconds_since_motion,
-    double hold_s, double max_step)
+    double hold_s, double max_step, double max_step_up)
 {
     if (walk_height <= 0.0)
         return stand_height;  // switch disabled: the fixed height, as before
@@ -76,7 +76,8 @@ double ilCommandHeight(
     const double goal   = moving ? walk_height : stand_height;
     if (max_step <= 0.0)
         return goal;
-    return std::clamp(goal, current - max_step, current + max_step);
+    const double up = max_step_up > 0.0 ? max_step_up : max_step;
+    return std::clamp(goal, current - max_step, current + up);
 }
 
 }  // namespace g1_motion_service_sim

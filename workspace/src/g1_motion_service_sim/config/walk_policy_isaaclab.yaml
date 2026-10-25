@@ -113,8 +113,14 @@
       # command_height, the old behaviour).
       walk_command_height: 0.72
       walk_command_height_hold_s: 1.0
-      # How fast the height command moves between the two, per second. 5.0 = within two ticks.
+      # How fast the height command moves between the two, per second: down to the walking
+      # height (5.0 = within two ticks, so the crouch is there by the first step) and back up
+      # to the standing height. Up at 5.0 too, the robot jerked upright the moment it stopped
+      # (MuJoCo: 0.84 m/s of pelvis lift, 1.7 rad/s of rocking -- enough to upset it with a panel
+      # in hand); at 0.03 (2.7 s up), with the stand reset held until it is fully up, 0.26 m/s
+      # and 0.86 rad/s, and it then stands still as before.
       command_height_rate: 5.0
+      stand_up_rate: 0.03
 
       # Gains to drive the 12 leg joints -- DDS motor order (same 15-wide layout as
       # walk_policy.yaml's lower_kp/lower_kd: legs 0-11 then waist 12-14), so the existing

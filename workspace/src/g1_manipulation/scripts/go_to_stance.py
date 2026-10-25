@@ -165,8 +165,10 @@ class GoToStance(Node):
         deadline = time.monotonic() + a.timeout
         # Stall watch: the gait does not creep. Commanded the 0.06 m/s floor a few cm short of the
         # stance, the isaaclab walker steps in place and the error stays put (seen at 5-6 cm, for
-        # minutes). Once inside --accept and no nearer by 5 mm for --stall s, it stops there.
-        best, best_at = float("inf"), time.monotonic()
+        # minutes). Inside --accept for --stall s on end without reaching the tolerance, it stops
+        # there. Not "no nearer for --stall s": stepping in place, the distance wobbles and every
+        # new low restarted that clock, so it never fired.
+        near_since = None
         while rclpy.ok():
             if time.monotonic() > deadline:
                 self.stop()
@@ -179,15 +181,13 @@ class GoToStance(Node):
                 continue
             e = self.errors(p, target)
             dist, ex, ey, eyaw, bearing = e
-            if dist < best - 0.005:
-                best, best_at = dist, time.monotonic()
-            if (
-                dist <= a.accept
-                and abs(eyaw) <= math.radians(max(a.tol_yaw_deg, a.accept_yaw_deg))
-                and time.monotonic() - best_at > a.stall
-            ):
+            if dist <= a.accept and abs(eyaw) <= math.radians(max(a.tol_yaw_deg, a.accept_yaw_deg)):
+                near_since = near_since or time.monotonic()
+            else:
+                near_since = None
+            if near_since is not None and time.monotonic() - near_since > a.stall:
                 self.stop()
-                self.report(e, "stopped: no nearer for %.0f s; " % a.stall)
+                self.report(e, "stopped: %.0f s within %.0f cm; " % (a.stall, 100.0 * a.accept))
                 self.get_logger().warn(
                     "stopped %.1f cm off the stance: the gait does not step any closer from here "
                     "(inside --accept %.0f cm, which the picks and places from the stances tolerate)"
@@ -253,10 +253,10 @@ def main():
         "--accept",
         type=float,
         default=0.08,
-        help="m: stop here if the walk stalls (no nearer for --stall s) this close",
+        help="m: stop here if the walk stalls (this close for --stall s)",
     )
     p.add_argument("--accept-yaw-deg", type=float, default=6.0, help="heading for --accept, degrees")
-    p.add_argument("--stall", type=float, default=4.0, help="s without getting nearer that is a stall")
+    p.add_argument("--stall", type=float, default=5.0, help="s inside --accept that is a stall")
     p.add_argument("--timeout", type=float, default=180.0, help="s for the walk")
     p.add_argument("--base-frame", default="base_footprint")
     a = p.parse_args()

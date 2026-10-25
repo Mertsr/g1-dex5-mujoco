@@ -260,6 +260,9 @@ TEST(WalkPolicyIsaacLab, CommandHeightCrouchesWhileDrivenAndStandsBackUp)
     EXPECT_NEAR(ilCommandHeight(0.72, 0.8, 0.72, 1.5, 1.0, 1.0), 0.8, 1e-12);
     // walk_height <= 0 disables the switch.
     EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.0, 0.0, 1.0, 1.0), 0.8, 1e-12);
+    // Down at max_step, up at max_step_up: crouch at once, stand up slowly.
+    EXPECT_NEAR(ilCommandHeight(0.8, 0.8, 0.72, 0.0, 1.0, 1.0, 0.001), 0.72, 1e-12);
+    EXPECT_NEAR(ilCommandHeight(0.72, 0.8, 0.72, 1.5, 1.0, 1.0, 0.001), 0.721, 1e-12);
 }
 
 }  // namespace

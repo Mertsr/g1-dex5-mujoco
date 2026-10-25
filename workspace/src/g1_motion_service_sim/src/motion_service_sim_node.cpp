@@ -575,6 +575,7 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     il_walk_height_         = declare_parameter("walk_policy_isaaclab.walk_command_height", 0.72);
     il_walk_height_hold_s_  = declare_parameter("walk_policy_isaaclab.walk_command_height_hold_s", 1.0);
     il_height_rate_         = declare_parameter("walk_policy_isaaclab.command_height_rate", 5.0);
+    il_stand_up_rate_       = declare_parameter("walk_policy_isaaclab.stand_up_rate", 0.03);
     il_rate_hz_             = rate_hz;
 
     if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||
@@ -687,8 +688,11 @@ void MotionServiceSim::walkPolicyIsaacLabTick()
         {
             il_zero_cmd_since_ = now;
         }
+        // Not before it has stood all the way back up (see ilCommandHeight()): clearing the
+        // history while the height is still changing jerked it, on top of the stand-up itself.
         if (il_stand_reset_after_s_ > 0.0 && !il_stand_reset_done_ &&
-            now - *il_zero_cmd_since_ >= std::chrono::duration<double>(il_stand_reset_after_s_))
+            now - *il_zero_cmd_since_ >= std::chrono::duration<double>(il_stand_reset_after_s_) &&
+            (il_walk_height_ <= 0.0 || il_config_.command_height >= il_stand_height_ - 1e-6))
         {
             il_history_->reset();
             il_delay_->reset();
@@ -712,7 +716,8 @@ void MotionServiceSim::walkPolicyIsaacLabTick()
         il_walk_height_,
         since_motion,
         il_walk_height_hold_s_,
-        il_height_rate_ / il_rate_hz_);
+        il_height_rate_ / il_rate_hz_,
+        il_stand_up_rate_ / il_rate_hz_);
 
     IlPolicyInputs inputs{};
     for (std::size_t il = 0; il < kIlNumJoints; ++il)
