@@ -575,7 +575,7 @@ bool MotionServiceSim::setUpWalkPolicyIsaacLab()
     il_walk_height_         = declare_parameter("walk_policy_isaaclab.walk_command_height", 0.72);
     il_walk_height_hold_s_  = declare_parameter("walk_policy_isaaclab.walk_command_height_hold_s", 1.0);
     il_height_rate_         = declare_parameter("walk_policy_isaaclab.command_height_rate", 5.0);
-    il_stand_up_rate_       = declare_parameter("walk_policy_isaaclab.stand_up_rate", 0.03);
+    il_stand_up_rate_       = declare_parameter("walk_policy_isaaclab.stand_up_rate", 0.1);
     il_rate_hz_             = rate_hz;
 
     if (joint_names.size() != kIlNumJoints || default_joint_pos.size() != kIlNumJoints ||

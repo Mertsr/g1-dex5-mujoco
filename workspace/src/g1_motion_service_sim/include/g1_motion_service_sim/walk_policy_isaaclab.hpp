@@ -232,8 +232,9 @@ std::array<float, kIlNumJoints> ilBuildFullAction(
  * Down fast, up slowly: the crouch has to be there by the first step, but standing back up at
  * the same rate (5 m/s, i.e. in one tick) jerked the robot upright the moment it stopped --
  * 0.84 m/s of pelvis lift and 1.7 rad/s of rocking in MuJoCo, enough to upset its balance with a
- * panel in hand. At 0.03 m/s up (2.7 s from 0.72 to 0.8), with the stand reset held until it
- * is fully up, 0.26 m/s and 0.86 rad/s.
+ * panel in hand. At 0.1 m/s up (0.8 s from 0.72 to 0.8), with the stand reset held until it is
+ * fully up, 0.5 m/s and 0.8-1.4 rad/s, and it settles as quickly as before; at 0.03 it kept
+ * stepping on the way up (17 cm after a walk backwards).
  *
  * @param seconds_since_motion seconds since the last non-zero command; negative for "never".
  */
