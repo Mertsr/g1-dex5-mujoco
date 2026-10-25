@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <random>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -355,6 +356,11 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     own_nullspace_gain_  = declare_parameter<double>("own_nullspace_gain", 0.01);
     own_limit_zone_rad_  = declare_parameter<double>("own_limit_zone_rad", 0.3);
     own_limit_margin_rad_ = declare_parameter<double>("own_limit_margin_rad", 0.05);
+    // A scoop takes the part in the arm configuration, of branch_tries random IK seeds' and the
+    // current joints', that can then lift it and raise it branch_rise_extra_m more straight up
+    // with the most room at the wrist (bestBranch).
+    branch_tries_         = declare_parameter<int>("branch_tries", 16);
+    branch_rise_extra_m_  = declare_parameter<double>("branch_rise_extra_m", 0.14);
     // Place: how far the tracked part may be from where the hand holds it before the place
     // warns that the camera's part of that name is not the one in the hand (a warning only).
     held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
@@ -1441,7 +1447,8 @@ bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::st
 
 bool G1ManipulationServer::moveOwnLine(
     MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
-    const std::string& what, double slack_deg, bool exact_end, double* reached)
+    const std::string& what, double slack_deg, bool exact_end, double* reached, double tilt_deg,
+    const std::map<std::string, double>* from_joints, bool dry_run, double* wrist_margin)
 {
     if (reached != nullptr)
     {
@@ -1452,6 +1459,14 @@ bool G1ManipulationServer::moveOwnLine(
     {
         RCLCPP_ERROR(get_logger(), "%s: no current state", what.c_str());
         return false;
+    }
+    if (from_joints != nullptr)
+    {
+        for (const auto& [name, value] : *from_joints)
+        {
+            start->setVariablePosition(name, value);
+        }
+        start->update();
     }
     const moveit::core::JointModelGroup* const jmg   = start->getJointModelGroup(group.getName());
     const std::vector<std::string>&            names = jmg->getVariableNames();
@@ -1504,33 +1519,54 @@ bool G1ManipulationServer::moveOwnLine(
     Eigen::VectorXd   last_q  = q;
     Eigen::Vector3d   last_p  = from.translation();
     double            w_yaw   = 1.0;  // < 1: the hand may turn about the vertical
+    double            w_tilt  = 1.0;  // < 1: the part may tilt from level, up to tilt_deg
     double            best    = std::numeric_limits<double>::infinity();
     int               stalled = 0;
     bool              done    = false;
     std::string       why;
     const double      h = 1e-4;
+    double            margin = std::numeric_limits<double>::infinity();
     for (int it = 0; it < 6000 && !done; ++it)
     {
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            if (names[i].find("wrist") != std::string::npos)
+            {
+                margin = std::min(margin, std::min(q[i] - lo[i], hi[i] - q[i]) + own_limit_margin_rad_);
+            }
+        }
         const Eigen::Isometry3d t  = fk(q);
         const Eigen::Vector3d   ep = goal_p - t.translation();
         Eigen::Vector3d         er = rot_log(goal_r * t.rotation().transpose());
         const double            yaw_err = er.dot(up);
         const Eigen::Vector3d   er_tilt = er - up * yaw_err;
         const bool end_yaw = exact_end || w_yaw >= 1.0;
-        if (ep.norm() < 0.001 && er_tilt.norm() < 0.004 && (!end_yaw || std::abs(yaw_err) < 0.004))
+        if (ep.norm() < 0.001 && (w_tilt < 1.0 || er_tilt.norm() < 0.004) && (!end_yaw || std::abs(yaw_err) < 0.004))
         {
             done = true;
             break;
         }
         if (std::abs(yaw_err) > slack_deg * M_PI / 180.0 + 0.01 && w_yaw < 1.0)
         {
+            const double need =
+                rot_log(goal_r * from.rotation().transpose()).dot(up) * 180.0 / M_PI;  // + = to the left
             why = "the hand would have to turn more than " + std::to_string(static_cast<int>(slack_deg)) +
-                  " deg about the vertical";
+                  " deg about the vertical (the goal is " + std::to_string(static_cast<int>(std::round(std::abs(need)))) +
+                  " deg to the " + (need > 0.0 ? "left" : "right") + " of the hand's heading: turn the robot that way by as much and try again)";
+            break;
+        }
+        if (w_tilt < 1.0 && er_tilt.norm() > tilt_deg * M_PI / 180.0 + 0.01)
+        {
+            why = "the part would have to tilt more than " + std::to_string(static_cast<int>(tilt_deg)) +
+                  " deg";
             break;
         }
         // Progress, with stalls detected: a joint limit or the arm's reach.
-        const double score = ep.norm() + 0.05 * er_tilt.norm() + (end_yaw ? 0.05 * std::abs(yaw_err) : 0.0);
-        if (score < best - 1e-5)
+        const double score =
+            ep.norm() + (w_tilt >= 1.0 ? 0.05 * er_tilt.norm() : 0.0) + (end_yaw ? 0.05 * std::abs(yaw_err) : 0.0);
+        // Progress is at least 0.2 mm (or its worth in turning) per 150 iterations; less is the
+        // arm creeping against a limit, and that is a stop, not a slow success.
+        if (score < best - 2e-4)
         {
             best    = score;
             stalled = 0;
@@ -1540,6 +1576,13 @@ bool G1ManipulationServer::moveOwnLine(
             if (w_yaw >= 1.0 && slack_deg > 0.0 && ep.norm() > 0.002)
             {
                 w_yaw   = 0.05;  // let the hand turn about the vertical, the part stays level
+                stalled = 0;
+                best    = std::numeric_limits<double>::infinity();
+                continue;
+            }
+            if (w_tilt >= 1.0 && tilt_deg > 0.0 && ep.norm() > 0.002)
+            {
+                w_tilt  = 0.05;  // then let the part tilt a little
                 stalled = 0;
                 best    = std::numeric_limits<double>::infinity();
                 continue;
@@ -1579,6 +1622,7 @@ bool G1ManipulationServer::moveOwnLine(
         // Weight: the turn about the vertical counts less once the hand may turn.
         Eigen::Matrix<double, 6, 6> w = Eigen::Matrix<double, 6, 6>::Identity();
         w.block<3, 3>(3, 3) -= (1.0 - w_yaw) * up * up.transpose();
+        w.block<3, 3>(3, 3) -= (1.0 - w_tilt) * (Eigen::Matrix3d::Identity() - up * up.transpose());
         const Eigen::VectorXd vw     = w * v;
         const double          lambda = 0.02;
         // A joint at a limit that the step would push further is taken out and the step solved
@@ -1657,7 +1701,11 @@ bool G1ManipulationServer::moveOwnLine(
         // A waypoint every centimetre of the hand or 0.05 rad of any joint, each checked
         // against everything: the robot itself, the part it holds, the octomap.
         const Eigen::Vector3d p_now = fk(q).translation();
-        if ((p_now - last_p).norm() > 0.01 || (q - last_q).cwiseAbs().maxCoeff() > 0.05)
+        if (dry_run)
+        {
+            last_p = p_now;
+        }
+        else if ((p_now - last_p).norm() > 0.01 || (q - last_q).cwiseAbs().maxCoeff() > 0.05)
         {
             std::map<std::string, double> joints;
             for (std::size_t i = 0; i < n; ++i)
@@ -1681,6 +1729,18 @@ bool G1ManipulationServer::moveOwnLine(
             last_q = q;
             last_p = p_now;
         }
+    }
+    if (wrist_margin != nullptr)
+    {
+        *wrist_margin = margin;
+    }
+    if (dry_run)
+    {
+        if (reached != nullptr)
+        {
+            *reached = done ? 1.0 : std::clamp(1.0 - (goal_p - last_p).norm() / total, 0.0, 1.0);
+        }
+        return done;
     }
     if (done)
     {
@@ -1706,8 +1766,31 @@ bool G1ManipulationServer::moveOwnLine(
     const double frac = std::clamp(1.0 - (goal_p - last_p).norm() / total, 0.0, 1.0);
     if (!done)
     {
-        RCLCPP_ERROR(get_logger(), "%s: stopped at %.0f%% of the line: %s", what.c_str(), 100.0 * frac,
-                     why.empty() ? "no progress" : why.c_str());
+        last_own_why_ = why.empty() ? "no progress" : why;
+        std::string start_q;
+        {
+            std::vector<double> v;
+            start->copyJointGroupPositions(jmg, v);
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                start_q += (i ? ", " : "") + std::to_string(v[i]).substr(0, 6);
+            }
+        }
+        std::vector<char> buf(2048);
+        std::snprintf(buf.data(), buf.size(), "%s: stopped at %.0f%% of the line: %s [from joints (%s), hand (%.3f, %.3f, %.3f) to "
+                     "(%.3f, %.3f, %.3f), goal quaternion (%.3f, %.3f, %.3f, %.3f)]",
+                     what.c_str(), 100.0 * frac, why.empty() ? "no progress in 6000 iterations" : why.c_str(),
+                     start_q.c_str(), from.translation().x(), from.translation().y(), from.translation().z(),
+                     goal_p.x(), goal_p.y(), goal_p.z(), goal.orientation.x, goal.orientation.y,
+                     goal.orientation.z, goal.orientation.w);
+        if (own_quiet_)
+        {
+            RCLCPP_INFO(get_logger(), "%s", buf.data());
+        }
+        else
+        {
+            RCLCPP_ERROR(get_logger(), "%s", buf.data());
+        }
         // A partial line only if the hand got somewhere: a stall at the start must not leave the
         // arm turned about with the hand where it was.
         if (reached == nullptr || trajectory.getWayPointCount() < 2 || frac * total < 0.01)
@@ -1749,6 +1832,78 @@ bool G1ManipulationServer::moveOwnLine(
         *reached = done ? 1.0 : frac;
     }
     return done;
+}
+
+std::optional<std::map<std::string, double>> G1ManipulationServer::bestBranch(
+    const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+    double rise_m, int tries, double ik_timeout_s)
+{
+    MoveGroup* const mg = groupFor(group);
+    if (mg == nullptr)
+    {
+        return std::nullopt;
+    }
+    const moveit::core::RobotStatePtr now = mg->getCurrentState();
+    if (now == nullptr)
+    {
+        return std::nullopt;
+    }
+    const moveit::core::JointModelGroup* const jmg   = now->getJointModelGroup(group);
+    const std::vector<std::string>&            names = jmg->getVariableNames();
+    std::vector<std::map<std::string, double>> found;
+    std::mt19937                               rng(11);
+    for (int k = 0; k <= tries; ++k)
+    {
+        std::map<std::string, double> seed;
+        for (const std::string& name : names)
+        {
+            const auto& b = now->getRobotModel()->getVariableBounds(name);
+            seed[name]    = k == 0 ? now->getVariablePosition(name) :
+                                     std::uniform_real_distribution<double>(b.min_position_, b.max_position_)(rng);
+        }
+        std::map<std::string, double> joints;
+        if (!hasIk(group, link, pose, &joints, ik_timeout_s, /*avoid_collisions=*/false, &seed).value_or(false))
+        {
+            continue;
+        }
+        bool same = false;
+        for (const auto& f : found)
+        {
+            double d = 0.0;
+            for (const auto& [name, value] : joints)
+            {
+                d = std::max(d, std::abs(value - f.at(name)));
+            }
+            same = same || d < 0.05;
+        }
+        if (!same)
+        {
+            found.push_back(joints);
+        }
+    }
+    const geometry_msgs::msg::Pose up = raised(pose, up_, rise_m);
+    std::optional<std::map<std::string, double>> best;
+    double best_score = -std::numeric_limits<double>::infinity();
+    std::string list;
+    for (const auto& f : found)
+    {
+        double     reached = 0.0;
+        double     margin  = 0.0;
+        const bool done    = moveOwnLine(*mg, link, up, "branch check", 0.0, false, &reached, 0.0, &f, true, &margin);
+        // Rising all the way first, then the most room left at the wrist.
+        const double score = (done ? 10.0 : reached) + margin;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s%.0f%%/%.2f", list.empty() ? "" : ", ", 100.0 * reached, margin);
+        list += buf;
+        if (score > best_score)
+        {
+            best_score = score;
+            best       = f;
+        }
+    }
+    RCLCPP_INFO(get_logger(), "%s at the grasp: %zu arm configurations (rise %.0f cm / wrist room, rad: %s); took "
+                "the one scoring %.2f", group.c_str(), found.size(), 100.0 * rise_m, list.c_str(), best_score);
+    return best;
 }
 
 bool G1ManipulationServer::moveBothTo(
@@ -2217,12 +2372,28 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     // the side the descent and slide could not follow (the wrist into the torso
                     // in the MoveIt harness, a few centimetres into the descent).
                     std::map<std::string, double> grasp_joints, entry_joints;
-                    const auto grasp_ik = hasIk(
-                        ctx.arm_group,
-                        ctx.grasp_frame,
-                        at.grasp,
-                        &grasp_joints,
-                        scoop_variant_ik_timeout_s_);
+                    // The arm configuration the part is taken in is the one it is carried in:
+                    // of several, the one that can lift it and raise it straight up with the
+                    // wrist furthest from its limits. The first IK answer often had the wrist
+                    // roll at its limit, and from there neither raise_<cm> nor the place could
+                    // follow a straight line.
+                    std::optional<bool> grasp_ik;
+                    if (const auto b = bestBranch(ctx.arm_group, ctx.grasp_frame, at.grasp,
+                                                  lift_height_m_ + branch_rise_extra_m_, branch_tries_,
+                                                  scoop_variant_ik_timeout_s_))
+                    {
+                        grasp_joints = *b;
+                        grasp_ik     = true;
+                    }
+                    else
+                    {
+                        grasp_ik = hasIk(
+                            ctx.arm_group,
+                            ctx.grasp_frame,
+                            at.grasp,
+                            &grasp_joints,
+                            scoop_variant_ik_timeout_s_);
+                    }
                     if (!grasp_ik)
                     {
                         fail(
@@ -3645,8 +3816,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         end_hand_exemption();
         fail(
             Place::Feedback::PHASE_PREPLACE,
-            straight_only ? "the straight line above the nest is blocked or out of reach from here "
-                            "(see the log): stand nearer or re-aim; nothing was swung" :
+            straight_only ? "the straight line above the nest does not go from here: " + last_own_why_ +
+                                ". Nothing was swung" :
                             "could not reach the pose above the target");
         return;
     }
@@ -3990,11 +4161,61 @@ void G1ManipulationServer::executeSetArmPosture(
         // robot and the held part. Nothing drawn in toward the body: that brought a held panel
         // to the robot's head. If the line is blocked part-way, the hand stays as high as it
         // got and the result says how high.
+        // Straight up first; where the arm cannot follow that line (a joint at its limit), the
+        // same height a few centimetres to a side, any side: the target is a height, not a
+        // point. The part stays level: tilted here it must be levelled at the nest, where the
+        // wrist has the least room (a 10-degree tilt allowed here left a place unable to start). Every try is computed before
+        // anything moves; only one is executed. Last, as high as the straight line goes.
         const geometry_msgs::msg::Pose now    = group->getCurrentPose(rarm.grasp_frame).pose;
         const geometry_msgs::msg::Pose target = raised(now, up_, cm / 100.0);
-        double     reached = 0.0;
-        const bool ok = moveOwnLine(*group, rarm.grasp_frame, target, goal->named_target, 20.0, false, &reached) ||
-                        reached >= 0.9;
+        std::vector<geometry_msgs::msg::Pose> targets{ target };
+        {
+            tf2::Vector3 a = up_.cross(tf2::Vector3(1.0, 0.0, 0.0));
+            if (a.length() < 1e-3)
+            {
+                a = up_.cross(tf2::Vector3(0.0, 1.0, 0.0));
+            }
+            a.normalize();
+            const tf2::Vector3 b = up_.cross(a);
+            for (const double r : { 0.04, 0.08 })
+            {
+                for (int k = 0; k < 8; ++k)
+                {
+                    const double       ang = k * M_PI / 4.0;
+                    const tf2::Vector3 off = (a * std::cos(ang) + b * std::sin(ang)) * r;
+                    geometry_msgs::msg::Pose t = target;
+                    t.position.x += off.x();
+                    t.position.y += off.y();
+                    t.position.z += off.z();
+                    targets.push_back(t);
+                }
+            }
+        }
+        double reached = 0.0;
+        bool   ok      = false;
+        own_quiet_ = true;  // the tries beside are expected to fail; the result says how it went
+        for (std::size_t i = 0; i < targets.size() && !ok; ++i)
+        {
+            if (i == 1)
+            {
+                RCLCPP_INFO(get_logger(), "%s: straight up does not go; the same height beside it",
+                            goal->named_target.c_str());
+            }
+            ok = moveOwnLine(*group, rarm.grasp_frame, targets[i],
+                             goal->named_target + (i ? " (" + std::to_string(i) + ", beside)" : std::string()),
+                             20.0, false, nullptr, 0.0);
+        }
+        own_quiet_ = false;
+        if (ok)
+        {
+            reached = 1.0;
+        }
+        else
+        {
+            ok = moveOwnLine(*group, rarm.grasp_frame, target, goal->named_target + " (as high as it goes)", 20.0,
+                             false, &reached, 0.0) ||
+                 reached >= 0.9;
+        }
         const double reached_cm = std::round(reached * cm);
         if (!rheld.empty())
         {

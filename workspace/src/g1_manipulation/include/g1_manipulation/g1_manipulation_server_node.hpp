@@ -255,10 +255,25 @@ private:
     /// vertical (the part stays level); @p exact_end turns it back at the goal. A waypoint
     /// every centimetre, each checked for collisions (robot, held part, octomap); a step that
     /// collides stops the line there. With @p reached, the part of the line that was clear is
-    /// executed even if the rest is not, and *reached says how much (0..1).
+    /// executed even if the rest is not, and *reached says how much (0..1). @p tilt_deg > 0 lets
+    /// the part tilt that far from level where the line goes no further otherwise. With
+    /// @p from_joints it starts there instead of at the arm's current joints; @p dry_run only
+    /// computes (no collision checks, nothing executed) and returns whether the line was
+    /// followed to the end; @p wrist_margin gets the least distance any wrist joint came to a
+    /// limit on the way.
     bool moveOwnLine(
         MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
-        const std::string& what, double slack_deg, bool exact_end, double* reached = nullptr);
+        const std::string& what, double slack_deg, bool exact_end, double* reached = nullptr,
+        double tilt_deg = 0.0, const std::map<std::string, double>* from_joints = nullptr,
+        bool dry_run = false, double* wrist_margin = nullptr);
+    /// For a hand pose about to be grasped at: the arm configuration (IK solution) to reach it
+    /// in, chosen among several (the current joints' and @p tries random seeds') for the one
+    /// from which the hand can then rise @p rise_m straight up, the part level, keeping its
+    /// wrist joints furthest from their limits (a kinematic dry run of moveOwnLine). Empty if
+    /// none is found.
+    std::optional<std::map<std::string, double>> bestBranch(
+        const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
+        double rise_m, int tries, double ik_timeout_s);
     /// Both arms at once, each to its own pose for its grasp frame: IK for each (seeded where it
     /// is), then one trajectory for both_arms, straight in joint space and timed together. For
     /// the short moves of a part held in two hands (a lift, a lower), which neither arm may make
@@ -296,6 +311,10 @@ private:
     double own_nullspace_gain_{ 0.01 };
     double own_limit_zone_rad_{ 0.3 };
     double own_limit_margin_rad_{ 0.05 };
+    int    branch_tries_{ 16 };
+    bool   own_quiet_{ false };       ///< moveOwnLine logs a stop as info, not error (expected tries)
+    std::string last_own_why_;        ///< why the last moveOwnLine stopped
+    double branch_rise_extra_m_{ 0.14 };
     double held_check_m_{ 0.12 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this

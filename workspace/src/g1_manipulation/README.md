@@ -292,7 +292,13 @@ result:
   vertical, the panel staying level, and it is at the nest's heading again for the descent. A
   waypoint every centimetre, each checked for collisions against the robot, the held part and
   the octomap. The raise goes straight up only (it no longer draws the hand toward the body:
-  that brought a panel to the robot's head). If a line stops -- a collision ahead, or the arm at
+  that brought a panel to the robot's head); where straight up does not go, the same height a
+  few centimetres to a side, the panel always level. The scoop takes the panel in the arm
+  configuration, of several IK solutions, that can then lift and raise it straight up with the
+  most room left at the wrist (`bestBranch`, `branch_tries`): the first IK answer often had the
+  wrist roll at its limit after the pick, and from there nothing could follow a straight line.
+  A place whose nest is turned more than 20 degrees from the panel's heading in the hand stops
+  and says which way and how far to turn the robot. If a line stops -- a collision ahead, or the arm at
   the end of its reach -- it says where and why (`raise_14: stopped at 41% of the line: ... at
   its limit: left_wrist_pitch_joint`); a raise keeps the height it reached and says how much
   that was. During the raise and the move above the nest the holding hand (not the arm) may
@@ -307,9 +313,10 @@ result:
   In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
   nest_4 empty, then nest_3 with nest_4 already filled, each set down 6-13 mm and 5-9 degrees
   from the nest's pose and let go, the panel never touching the robot's body or head, from
-  three stances at the tray (`panel_1_left` and two 5-6 cm / 5 degrees off it). From a fourth,
-  turned 20 degrees, the raise stopped at 6 of 14 cm with the wrist pitch at its limit and said
-  so. The right hand's pick still goes through. Where the left pick at the tray went through
+  stances at the tray across `go_to_stance.py`'s tolerance (`panel_1_left`, and turned -18 and
+  -2 degrees instead of -10). Picked from a stance turned 20 degrees the panel sits 19 degrees
+  off in the hand and the place says to turn the robot by that much. The right hand's pick
+  still goes through. Where the left pick at the tray went through
   (it misses about half the time there, knocking the panel), the place went through every
   time. Needs the simulator
   rebuilt with this repo's `workspace/vendor/unitree_mujoco/conveyor_handler.cc` for the pallet
