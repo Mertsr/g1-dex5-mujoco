@@ -23,9 +23,12 @@ stance within about +-10 cm and +-10 degrees of it worked there, so the toleranc
 (2 cm, 3 degrees) are far inside what the pick needs.
 
 HOW IT WALKS. Straight there -- there is no obstacle avoidance: start with a clear line to the
-stance (in front of the table, not beside it). More than `--near` (1.0 m) away it turns to face
-the stance and walks to it, steering; nearer, it moves forward, sideways and turns at once,
-each proportional to its error, to the stance's own heading. Commands are held above the gait
+stance (in front of the table, not beside it). Until `--fine` (12 cm) away it turns to face the
+stance and walks to it, steering; from there it turns on the spot to the stance's heading when
+that is more than --turn-while-moving-deg off, and otherwise steps forward and sideways, never
+both at once (the isaaclab gait walks backwards while turning on the spot, and turns while
+stepping sideways). Once inside --accept (10 cm) for --stall (8 s) without getting inside the
+tolerance, it stops there and says how far off it is. Commands are held above the gait
 shaper's dead zone (0.05 m/s, 0.10 rad/s) until inside tolerance and go to /cmd_vel_approach,
 the gait shaper's priority input -- so it needs nav:=true. Done after 2 s inside tolerance.
 
@@ -169,6 +172,8 @@ class GoToStance(Node):
         # there. Not "no nearer for --stall s": stepping in place, the distance wobbles and every
         # new low restarted that clock, so it never fired.
         near_since = None
+        turning = False
+        fine = False  # latched once within --fine: no going back to facing the stance
         while rclpy.ok():
             if time.monotonic() > deadline:
                 self.stop()
@@ -195,7 +200,7 @@ class GoToStance(Node):
                 )
                 return True
             t = Twist()
-            if dist > a.near:
+            if dist > max(a.fine, tol) and not fine:
                 # Far: face the stance and walk to it, steering; sideways only near it.
                 if abs(bearing) > math.radians(25.0):
                     t.angular.z = command(bearing, a.gain_yaw, 0.12, a.max_turn, 0.0)
@@ -203,9 +208,36 @@ class GoToStance(Node):
                     t.linear.x = command(dist, a.gain, 0.06, a.max_speed_far, 0.0)
                     t.angular.z = command(bearing, a.gain_yaw, 0.12, a.max_turn, math.radians(3.0))
             else:
-                t.linear.x = command(ex, a.gain, 0.06, a.max_speed, tol / math.sqrt(2.0))
-                t.linear.y = command(ey, a.gain, 0.06, a.max_speed, tol / math.sqrt(2.0))
-                t.angular.z = command(eyaw, a.gain_yaw, 0.12, a.max_turn, tyaw)
+                # Within --fine of the stance: from here only small corrections. (Further out it
+                # faces the stance and walks to it, steering, as above: walking straight ahead is
+                # what policy.onnx tracks best -- walking forward and sideways at once turned it
+                # off its heading, and turning to fix that walked it back, 4 cm a cycle, and it
+                # never got in from 35 cm.)
+                fine = True
+                # Turn OR walk, never both, with a dead band between them. Measured against
+                # policy.onnx in MuJoCo (4 s of each): forward 0.06 m/s moved it 8 cm, 0.10 m/s
+                # 26 cm -- the floor here was the former, and the last 5-9 cm never closed; and
+                # turning on the spot at 0.12 rad/s walked it 10 cm BACKWARDS. A heading 3-4
+                # degrees off corrected all the way in held it 9 cm short; a heading hovering at
+                # a single threshold toggled the turn every tick and it stepped in place.
+                # So: turn on the spot (at --near-turn-floor at least) once the heading is more
+                # than --turn-while-moving-deg off, or once the position is in and the heading
+                # is not, until the heading is within its tolerance; otherwise walk straight,
+                # forward at --near-floor-x at least.
+                xy = math.hypot(ex, ey)
+                if turning:
+                    turning = abs(eyaw) > tyaw
+                else:
+                    turning = abs(eyaw) > math.radians(a.turn_while_moving_deg) or (
+                        xy <= tol and abs(eyaw) > tyaw
+                    )
+                if turning:
+                    t.angular.z = command(eyaw, a.gain_yaw, a.near_turn_floor, a.max_turn, 0.0)
+                else:
+                    t.linear.x = command(
+                        ex, a.gain, a.near_floor_x if ex > 0 else 0.06, a.max_speed, tol / math.sqrt(2.0)
+                    )
+                    t.linear.y = command(ey, a.gain, 0.06, a.max_speed, tol / math.sqrt(2.0))
             if self.inside(e) or not (t.linear.x or t.linear.y or t.angular.z):
                 self.cmd.publish(Twist())
                 inside_since = inside_since or time.monotonic()
@@ -243,6 +275,12 @@ def main():
     p.add_argument("--tol", type=float, default=0.02, help="position tolerance, m")
     p.add_argument("--tol-yaw-deg", type=float, default=3.0, help="heading tolerance, degrees")
     p.add_argument("--near", type=float, default=1.0, help="m: nearer, move sideways too")
+    p.add_argument(
+        "--fine",
+        type=float,
+        default=0.12,
+        help="m: nearer, turn to the heading on the spot and step the rest in small corrections",
+    )
     p.add_argument("--gain", type=float, default=0.8, help="m/s per m of error")
     p.add_argument("--gain-yaw", type=float, default=1.0, help="rad/s per rad of error")
     p.add_argument("--max-speed", type=float, default=0.15, help="m/s near the stance")
@@ -250,13 +288,25 @@ def main():
     p.add_argument("--max-turn", type=float, default=0.40, help="rad/s")
     p.add_argument("--settle", type=float, default=2.0, help="s inside tolerance to finish")
     p.add_argument(
+        "--near-floor-x", type=float, default=0.10, help="m/s: least forward command near the stance"
+    )
+    p.add_argument(
+        "--near-turn-floor", type=float, default=0.2, help="rad/s: least turn once the position is in"
+    )
+    p.add_argument(
+        "--turn-while-moving-deg",
+        type=float,
+        default=8.0,
+        help="near the stance, a smaller heading error is corrected only once the position is in",
+    )
+    p.add_argument(
         "--accept",
         type=float,
-        default=0.08,
+        default=0.10,
         help="m: stop here if the walk stalls (this close for --stall s)",
     )
-    p.add_argument("--accept-yaw-deg", type=float, default=6.0, help="heading for --accept, degrees")
-    p.add_argument("--stall", type=float, default=5.0, help="s inside --accept that is a stall")
+    p.add_argument("--accept-yaw-deg", type=float, default=8.0, help="heading for --accept, degrees")
+    p.add_argument("--stall", type=float, default=8.0, help="s inside --accept that is a stall")
     p.add_argument("--timeout", type=float, default=180.0, help="s for the walk")
     p.add_argument("--base-frame", default="base_footprint")
     a = p.parse_args()

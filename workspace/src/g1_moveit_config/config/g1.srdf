@@ -346,22 +346,6 @@
     <joint name="right_wrist_pitch_joint" value="0.00"/>
     <joint name="right_wrist_yaw_joint" value="0.00"/>
   </group_state>
-  <!-- carry_nest (left arm): a panel held at scoop_left_near, carried from the tray to the pallet.
-       Standing at pallet_end_left (g1_manipulation stances.yaml: the belt's start, facing along
-       it) the panel hangs 13 cm above where it is set down in nest_4, its underside (0.92 m) over
-       the rails (0.85), the nests' end cradles (0.84) and a panel already seated in nest_4 (0.88),
-       so the walk in brings it over the pallet rather than into it; the place starts from here
-       (a straight line to above the nest). Solved with move_group's IK on the URDF and checked
-       with the panel attached: the solution nearest the arm's pose after the scoop's lift. -->
-  <group_state name="carry_nest" group="left_arm">
-    <joint name="left_shoulder_pitch_joint" value="-2.561"/>
-    <joint name="left_shoulder_roll_joint" value="1.013"/>
-    <joint name="left_shoulder_yaw_joint" value="-2.219"/>
-    <joint name="left_elbow_joint" value="-0.622"/>
-    <joint name="left_wrist_roll_joint" value="1.627"/>
-    <joint name="left_wrist_pitch_joint" value="-0.850"/>
-    <joint name="left_wrist_yaw_joint" value="-0.235"/>
-  </group_state>
   <group_state name="carry" group="both_arms">
     <joint name="left_shoulder_pitch_joint" value="-0.20"/>
     <joint name="left_shoulder_roll_joint" value="0.60"/>

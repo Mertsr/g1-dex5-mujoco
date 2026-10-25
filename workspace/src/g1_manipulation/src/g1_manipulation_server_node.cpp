@@ -331,6 +331,10 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     reaim_max_shift_m_   = declare_parameter<double>("reaim_max_shift_m", 0.04);
     locate_timeout_s_    = declare_parameter<double>("locate_timeout_s", 3.0);
     linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
+    // For the moves that carry a held part into a slot or raise it (raise_<cm>): a straight
+    // line whose IK turns the wrist over half-way is not a straight line for the part -- it
+    // swung a panel past the robot's head. computeCartesianPath's relative jump threshold.
+    linear_jump_threshold_ = declare_parameter<double>("linear_jump_threshold", 2.0);
     // A published grasp is tried turned about its closing axis by up to this much, in these
     // steps, and with the hand turned over if allowed; only tilts whose fingers still point down
     // by at least grasp_min_descent (the z of the approach direction) are kept.
@@ -933,7 +937,7 @@ bool G1ManipulationServer::moveToNamed(MoveGroup& group, const std::string& name
 
 bool G1ManipulationServer::moveLinear(
     MoveGroup& group, const geometry_msgs::msg::Pose& pose, const std::string& link,
-    const std::string& what)
+    const std::string& what, double jump_threshold)
 {
     group.setStartStateToCurrentState();
     // computeCartesianPath moves the group's end-effector link; the goal is for the grasp
@@ -941,7 +945,8 @@ bool G1ManipulationServer::moveLinear(
     const std::string previous = group.getEndEffectorLink();
     group.setEndEffectorLink(link);
     moveit_msgs::msg::RobotTrajectory trajectory;
-    const double fraction = group.computeCartesianPath({ pose }, 0.005, 0.0, trajectory, true);
+    const double fraction =
+        group.computeCartesianPath({ pose }, 0.005, jump_threshold, trajectory, true);
     group.setEndEffectorLink(previous);
     if (fraction < linear_min_fraction_)
     {
@@ -949,7 +954,8 @@ bool G1ManipulationServer::moveLinear(
         // between the waypoints) -- is the same call without the collision check.
         group.setEndEffectorLink(link);
         moveit_msgs::msg::RobotTrajectory unchecked;
-        const double free = group.computeCartesianPath({ pose }, 0.005, 0.0, unchecked, false);
+        const double free =
+            group.computeCartesianPath({ pose }, 0.005, jump_threshold, unchecked, false);
         group.setEndEffectorLink(previous);
         // What it runs into: the first waypoint of the unchecked line past where the checked one
         // stopped, checked against the scene.
@@ -3198,18 +3204,26 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     goal_handle->publish_feedback(feedback);
     // In two hands the pair goes together, straight in joint space: no plan for both_arms to a
     // pair of poses here, so keep the carry short (walk there first, then place).
-    // Into a slot, held at a grasp, in one hand: a straight line there first, planned only if the
-    // line is blocked. The part is usually carried near the pallet already (carry_nest), and a
-    // planned path between two nearby poses can swing it a long way round: going from above
-    // nest_4 to above nest_3 (15 cm), one swung the panel over the robot's head, into its torso,
-    // and it was dropped. Other targets keep the planned move as before.
-    const bool straight_first = is_slot && grasp_T_object && !support_arm;
+    // Into a slot, held at a grasp, in one hand: a straight line there and nothing else, with
+    // the wrist kept from turning over on the way (linear_jump_threshold). The part is carried
+    // to the pallet already raised (raise_<cm>), so above the nest is a short line away; a
+    // planned path to it swung the panel a long way round -- over the robot's head, into its
+    // torso, dropped once -- and so did a straight line whose IK flipped the wrist half-way. If
+    // the line is blocked or the arm cannot follow it, the place stops there and says so: step
+    // closer or re-aim, rather than have the part swung about. Other targets plan as before.
+    const bool straight_only = is_slot && grasp_T_object && !support_arm;
     if (!(support_arm ?
               moveBothTo(arm, preplace, support, support_at(preplace), "preplace in two hands") :
-              (straight_first && moveLinear(*arm_group, preplace, arm.grasp_frame, "preplace, straight")) ||
-                  moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
+          straight_only ?
+              moveLinear(
+                  *arm_group, preplace, arm.grasp_frame, "preplace, straight", linear_jump_threshold_) :
+              moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
     {
-        fail(Place::Feedback::PHASE_PREPLACE, "could not reach the pose above the target");
+        fail(
+            Place::Feedback::PHASE_PREPLACE,
+            straight_only ? "the straight line to above the nest is blocked or the arm cannot follow "
+                            "it without turning the wrist over (see the log); nothing was swung" :
+                            "could not reach the pose above the target");
         return;
     }
 
@@ -3336,7 +3350,8 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
 
     // Now the hand may touch the surface: the descent ends in contact by definition.
     allowHandContact(arm, touchables, true);
-    if (!lowered && !(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower") :
+    const double slot_jump = is_slot ? linear_jump_threshold_ : 0.0;
+    if (!lowered && !(grasp_T_object ? moveLinear(*arm_group, place_goal, arm.grasp_frame, "lower", slot_jump) :
                                        moveTo(*arm_group, place_goal, arm.grasp_frame, "lower")))
     {
         fail(Place::Feedback::PHASE_LOWER, "could not lower onto the target");
@@ -3407,7 +3422,7 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     if (scooped)
     {
         const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_, up_);
-        if (!moveLinear(*arm_group, out, arm.grasp_frame, "slide out"))
+        if (!moveLinear(*arm_group, out, arm.grasp_frame, "slide out", slot_jump))
         {
             fail(Place::Feedback::PHASE_RETREAT, "could not slide the hand out from under the part");
             return;
@@ -3496,6 +3511,70 @@ void G1ManipulationServer::executeSetArmPosture(
         goal_handle->abort(result);
         return;
     }
+    // "raise_<cm>": the hand straight up that far from wherever it is, turned as it is -- a
+    // carry height after a pick, without a fixed posture to get there. A named joint posture
+    // (carry_nest) is one arm configuration; reached from a pick that left the arm in another,
+    // the planner turned the whole arm round with the part in hand, past the robot's head.
+    if (goal->named_target.rfind("raise_", 0) == 0)
+    {
+        double cm = 0.0;
+        try
+        {
+            cm = std::stod(goal->named_target.substr(6));
+        }
+        catch (const std::exception&)
+        {
+            cm = 0.0;
+        }
+        ArmContext  rarm;
+        const std::string rside = goal->group.rfind("left_", 0) == 0 ? "left" :
+                                  goal->group.rfind("right_", 0) == 0 ? "right" : "";
+        if (cm <= 0.0 || cm > 40.0 || rside.empty() || !resolveArm(rside, rarm))
+        {
+            result->success = false;
+            result->message = "raise_<cm> needs a left_arm or right_arm group and 0 < cm <= 40, got '" +
+                              goal->named_target + "' for '" + goal->group + "'";
+            goal_handle->abort(result);
+            return;
+        }
+        refreshUp();
+        std::string rheld;
+        for (const auto& [id, body] : planning_scene_.getAttachedObjects())
+        {
+            if (body.link_name == rarm.palm_link)
+            {
+                rheld = id;
+            }
+        }
+        // Whatever it holds may pass through the octomap on the way up, as in the pick's lift:
+        // it starts inside the depth the camera took of it.
+        if (!rheld.empty())
+        {
+            allowHandContact(rarm, { "<octomap>", rheld }, true, /*include_links=*/false);
+        }
+        const geometry_msgs::msg::Pose now = group->getCurrentPose(rarm.grasp_frame).pose;
+        const geometry_msgs::msg::Pose up  = raised(now, up_, cm / 100.0);
+        const bool ok = moveLinear(*group, up, rarm.grasp_frame, goal->named_target, linear_jump_threshold_);
+        if (!rheld.empty())
+        {
+            allowHandContact(rarm, { "<octomap>", rheld }, false, /*include_links=*/false);
+        }
+        result->success = ok;
+        result->message = ok ? goal->group + " raised " + goal->named_target.substr(6) + " cm" +
+                                   (rheld.empty() ? std::string() : " holding " + rheld) :
+                               "could not raise the hand " + goal->named_target.substr(6) +
+                                   " cm in a straight line (see the log)";
+        if (ok)
+        {
+            goal_handle->succeed(result);
+        }
+        else
+        {
+            goal_handle->abort(result);
+        }
+        return;
+    }
+
     bool reached = moveToNamed(*group, goal->named_target);
     // An arm holding a part (a carry posture after a pick): the part is the robot's to the
     // octomap's self filter only as far as its attached box goes, and the depth of a part held

@@ -180,9 +180,11 @@ private:
     /// A straight-line move of `link` to `pose` (Cartesian path), time-parameterised at the
     /// skills' velocity scaling. For the last centimetres into and out of a grasp, where a
     /// free-space plan may swing through the parts packed beside the target.
+    /// @param jump_threshold computeCartesianPath's: > 0 stops the line where the IK jumps to
+    ///        another arm configuration between two waypoints (the wrist turning over), 0 lets it.
     bool moveLinear(
         MoveGroup& group, const geometry_msgs::msg::Pose& pose, const std::string& link,
-        const std::string& what);
+        const std::string& what, double jump_threshold = 0.0);
 
     /// Puts the object into the planning scene at its measured pose, already transformed into
     /// the planning frame, so plans route around it. Returns what it built: the world copy is
@@ -274,6 +276,7 @@ private:
     double grasp_approach_m_{ 0.20 };  ///< straight-line approach and retreat length
     double reaim_max_shift_m_{ 0.04 };  ///< how far a part may move before the descent and still be followed
     double linear_min_fraction_{ 0.95 };
+    double linear_jump_threshold_{ 2.0 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
     double grasp_tilt_step_rad_{ M_PI / 12 };

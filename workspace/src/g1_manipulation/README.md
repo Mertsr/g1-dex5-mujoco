@@ -268,25 +268,30 @@ result:
   ros2 run g1_manipulation ready_arms.py
   ros2 run g1_manipulation go_to_stance.py panel_1_left
   ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: left, hands: 1}" --feedback
-  ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: carry_nest}" --feedback
+  ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: raise_14}" --feedback
   ros2 run g1_manipulation go_to_stance.py pallet_approach_left
   ros2 run g1_manipulation go_to_stance.py pallet_end_left
   ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_4, arm: auto}" --feedback
   ```
 
-  The next panel goes to `pallet/slot/nest_3` from the same stance. A posture taken while a hand holds a
-  part (`carry_nest` after the pick) that cannot be planned is retried once with the held part
-  -- not the arm -- allowed to touch the octomap: the head camera sees a part held up in front of
-  it, and its depth lands in the octomap around the part's own box. `go_to_stance.py` stops
-  short when the walk stalls: inside `--accept` (8 cm, 6 degrees) and no nearer for `--stall`
-  (4 s), it stops there and says how far off it is; the isaaclab walker steps in place rather
-  than creep the last few cm at the 0.06 m/s floor. `carry_nest` holds the panel
-  13 cm above nest_4, its underside over the rails, the nests' cradles and a panel already in
-  nest_4, so the walk in brings it over the pallet. A place into a slot clears and refills the
-  octomap first (it is kept in the pelvis frame, so after the walk it holds the tray's ghosts)
-  and goes to the pose above the nest in a straight line before it plans; other places are as
-  before. In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
-  nest_4 empty, then nest_3 with nest_4 already filled, each set down 11-13 mm and 5-7 degrees
+  The next panel goes to `pallet/slot/nest_3` from the same stance. `raise_14` lifts the hand
+  14 cm straight up from wherever the pick left it, turned as it is (any `raise_<cm>` up to 40
+  works, for either arm): the panel's underside then clears the rails, the nests' cradles and a
+  panel already in nest_4. A fixed joint posture for this (the former `carry_nest`) turned the
+  whole arm round from a pick that ended in another arm configuration, panel and all, past the
+  robot's head. A place into a slot clears and refills the octomap first (it is kept in the
+  pelvis frame, so after the walk it holds the tray's ghosts), then goes to the pose above the
+  nest in a straight line only, the wrist kept from turning over on the way
+  (`linear_jump_threshold`, also on the way down and out): if that line is blocked it stops and
+  says so rather than plan the part round the robot. Other places are as before. A posture taken
+  while a hand holds a part that cannot be planned is retried once with the held part allowed
+  to touch the octomap (the head camera sees a part held up in front of it).
+  `go_to_stance.py` walks the last 12 cm in small corrections, turning on the spot or stepping,
+  never both (the isaaclab gait walks backwards while turning on the spot, and barely moves at
+  0.06 m/s forward), and stops where the walk stalls: inside `--accept` (10 cm, 8 degrees) for
+  `--stall` (8 s), it stops and says how far off it is.
+  In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
+  nest_4 empty, then nest_3 with nest_4 already filled, each set down 10-15 mm and 5-7 degrees
   from the nest's pose and let go; where the left pick at the tray went through (it missed in 2
   of 4 there, knocking the panel), the place went through every time. Needs the simulator
   rebuilt with this repo's `workspace/vendor/unitree_mujoco/conveyor_handler.cc` for the pallet

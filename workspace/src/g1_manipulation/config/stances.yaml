@@ -25,7 +25,8 @@ stances:
   # the hand comes at it the same way. Checked with move_group's IK on the URDF over a grid of
   # stances (both nests and 8 cm above each, no self-collision): this is the middle of the stances
   # that reach both; 5 cm nearer, the hand could not slide fully out from under the set-down panel
-  # (the arm folds back too far). Take carry_nest (SetArmPosture left_arm) before walking here.
+  # (the arm folds back too far). Raise the panel first (SetArmPosture left_arm raise_14), so it
+  # comes in over the rails and a panel already seated in nest_4.
   pallet_end_left: {x: -0.50, y: 0.42, yaw_deg: 0.0, frame: odom}
 
   # On the way to pallet_end_left: beside the belt's start, clear of its near corner (the leg at
