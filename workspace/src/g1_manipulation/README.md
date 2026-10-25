@@ -281,16 +281,23 @@ result:
   whole arm round from a pick that ended in another arm configuration, panel and all, past the
   robot's head. A place into a slot clears and refills the octomap first (it is kept in the
   pelvis frame, so after the walk it holds the tray's ghosts), then goes to the pose above the
-  nest, down into it and back out in straight lines, the wrist kept from turning over on the
-  way (`linear_jump_threshold`). Where a straight line cannot be followed (a joint at its limit,
-  the line blocked) the raise and the place go the same way in 1 cm steps: each step an IK
-  solution seeded with the last, collision-free with the held part included, and no joint
-  turning more than `stepwise_max_joint_step_rad` (0.25 rad) between two steps -- so the arm
-  never swings; the hand may turn up to 20 degrees about the vertical on the way (the panel
-  stays level) and is back at the nest's orientation for the descent. During the raise and the
-  move above the nest the holding hand (not the arm) may touch the octomap: the camera sees the
-  hand round the panel it holds. If neither way gets there it stops and says so rather than
-  plan the part round the robot. Other places are as before. A posture taken
+  nest, down into it and back out along straight lines of this node's own (`moveOwnLine`), not
+  MoveIt's; so does the pick's lift once the part is in the hand. No planner and no IK service:
+  the hand advances a few millimetres per iteration along the line and the joints follow by
+  damped least squares on the hand's Jacobian, so they change continuously and the arm cannot
+  jump to another configuration half-way and swing what it holds (MoveIt's straight lines had
+  no such check on the lift). The arm's spare degree of freedom pushes a joint that nears its
+  limit back out; a joint at its limit is taken out of the step and the others make up for it.
+  Where the hand's heading is out of reach the hand may turn up to 20 degrees about the
+  vertical, the panel staying level, and it is at the nest's heading again for the descent. A
+  waypoint every centimetre, each checked for collisions against the robot, the held part and
+  the octomap. The raise goes straight up only (it no longer draws the hand toward the body:
+  that brought a panel to the robot's head). If a line stops -- a collision ahead, or the arm at
+  the end of its reach -- it says where and why (`raise_14: stopped at 41% of the line: ... at
+  its limit: left_wrist_pitch_joint`); a raise keeps the height it reached and says how much
+  that was. During the raise and the move above the nest the holding hand (not the arm) may
+  touch the octomap: the camera sees the hand round the panel it holds. Nothing is ever
+  planned round the robot with the part in hand. Other places are as before. A posture taken
   while a hand holds a part that cannot be planned is retried once with the held part allowed
   to touch the octomap (the head camera sees a part held up in front of it).
   `go_to_stance.py` walks the last 12 cm in small corrections, turning on the spot or stepping,
@@ -298,12 +305,13 @@ result:
   0.06 m/s forward), and stops where the walk stalls: inside `--accept` (10 cm, 8 degrees) for
   `--stall` (8 s), it stops and says how far off it is.
   In a MuJoCo-in-the-loop harness (the robot moved between the stances, not walked):
-  nest_4 empty, then nest_3 with nest_4 already filled, each set down 5-13 mm and 5-8 degrees
-  from the nest's pose and let go, the panel never touching the robot's body or head; also with
-  the straight lines switched off (`carry_straight_first: false`), the raise, the move above the
-  nest, the descent and the way out all in steps, the hand never turned. Where the left pick at
-  the tray went through (it misses about half the time there, knocking the panel), the place
-  went through every time. Needs the simulator
+  nest_4 empty, then nest_3 with nest_4 already filled, each set down 6-13 mm and 5-9 degrees
+  from the nest's pose and let go, the panel never touching the robot's body or head, from
+  three stances at the tray (`panel_1_left` and two 5-6 cm / 5 degrees off it). From a fourth,
+  turned 20 degrees, the raise stopped at 6 of 14 cm with the wrist pitch at its limit and said
+  so. The right hand's pick still goes through. Where the left pick at the tray went through
+  (it misses about half the time there, knocking the panel), the place went through every
+  time. Needs the simulator
   rebuilt with this repo's `workspace/vendor/unitree_mujoco/conveyor_handler.cc` for the pallet
   to stay put.
 

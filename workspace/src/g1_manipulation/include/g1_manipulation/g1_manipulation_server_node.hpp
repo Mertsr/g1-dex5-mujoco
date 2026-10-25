@@ -247,15 +247,18 @@ private:
     void usePinchFrame(ArmContext& arm);
     bool planWithRecovery(MoveGroup& group, MoveGroup::Plan& plan, const std::string& what);
     bool moveToJoints(MoveGroup& group, const std::map<std::string, double>& joints, const std::string& what);
-    /// To @p goal for @p link in 1 cm steps, each an IK solution seeded with the last and no
-    /// joint turning more than stepwise_max_joint_step_rad between two: the arm follows the
-    /// line and never swings. Where the line's own orientation hits a joint limit, a step may
-    /// turn the hand about the vertical by up to @p slack_deg (the part stays level); with
-    /// @p exact_end the last step is the goal's orientation exactly. Each step collision-free,
-    /// the held part included.
-    bool moveStepwise(
+    /// This node's own motion, no planner and no IK service: @p link to @p goal along the
+    /// straight line, a few millimetres at a time, the joints moved by damped least squares on
+    /// the hand's Jacobian -- continuous, so the arm can never jump to another configuration
+    /// and swing what it holds -- the spare degree of freedom keeping the joints mid-range.
+    /// Where the goal's heading is out of reach the hand may turn up to @p slack_deg about the
+    /// vertical (the part stays level); @p exact_end turns it back at the goal. A waypoint
+    /// every centimetre, each checked for collisions (robot, held part, octomap); a step that
+    /// collides stops the line there. With @p reached, the part of the line that was clear is
+    /// executed even if the rest is not, and *reached says how much (0..1).
+    bool moveOwnLine(
         MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
-        const std::string& what, double slack_deg, bool exact_end);
+        const std::string& what, double slack_deg, bool exact_end, double* reached = nullptr);
     /// Both arms at once, each to its own pose for its grasp frame: IK for each (seeded where it
     /// is), then one trajectory for both_arms, straight in joint space and timed together. For
     /// the short moves of a part held in two hands (a lift, a lower), which neither arm may make
@@ -287,8 +290,12 @@ private:
     double linear_min_fraction_{ 0.95 };
     double linear_jump_threshold_{ 2.0 };
     double linear_max_joint_step_rad_{ 0.25 };
-    double stepwise_max_joint_step_rad_{ 0.25 };
-    bool   carry_straight_first_{ true };
+    double own_step_m_{ 0.004 };
+    double own_step_rad_{ 0.03 };
+    double own_max_dq_rad_{ 0.02 };
+    double own_nullspace_gain_{ 0.01 };
+    double own_limit_zone_rad_{ 0.3 };
+    double own_limit_margin_rad_{ 0.05 };
     double held_check_m_{ 0.12 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this
