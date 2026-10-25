@@ -265,12 +265,24 @@ private:
         MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
         const std::string& what, double slack_deg, bool exact_end, double* reached = nullptr,
         double tilt_deg = 0.0, const std::map<std::string, double>* from_joints = nullptr,
-        bool dry_run = false, double* wrist_margin = nullptr);
+        bool dry_run = false, double* wrist_margin = nullptr,
+        std::map<std::string, double>* end_joints = nullptr);
     /// For a hand pose about to be grasped at: the arm configuration (IK solution) to reach it
     /// in, chosen among several (the current joints' and @p tries random seeds') for the one
     /// from which the hand can then rise @p rise_m straight up, the part level, keeping its
     /// wrist joints furthest from their limits (a kinematic dry run of moveOwnLine). Empty if
     /// none is found.
+    /// Where the robot would have to stand for the held part to go straight above a nest
+    /// (@p above) and down into it (@p in) -- both in the planning frame as it stands now --
+    /// with the arm as it is: the nearest of a ring search, moved forward dx / left dy (m) and
+    /// turned dyaw_deg, and that in stance_frame (x, y, yaw_deg). Empty if none within reach.
+    struct StanceFix
+    {
+        double dx, dy, dyaw_deg, x, y, yaw_deg;
+    };
+    std::optional<StanceFix> stanceFor(
+        MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& above,
+        const geometry_msgs::msg::Pose& in);
     std::optional<std::map<std::string, double>> bestBranch(
         const std::string& group, const std::string& link, const geometry_msgs::msg::Pose& pose,
         double rise_m, int tries, double ik_timeout_s);
@@ -315,6 +327,12 @@ private:
     bool   own_quiet_{ false };       ///< moveOwnLine logs a stop as info, not error (expected tries)
     std::string last_own_why_;        ///< why the last moveOwnLine stopped
     double branch_rise_extra_m_{ 0.14 };
+    double branch_room_m_{ 0.08 };
+    double stance_search_m_{ 0.14 };
+    int    stance_search_tries_{ 400 };
+    double stance_search_s_{ 20.0 };
+    std::string stance_frame_{ "odom" };
+    std::string stance_base_frame_{ "base_footprint" };
     double held_check_m_{ 0.12 };
     double locate_timeout_s_{ 3.0 };  ///< how long a pick waits for its object to be reported
     double grasp_tilt_max_rad_{ M_PI_2 };   ///< published grasps are tried tilted up to this

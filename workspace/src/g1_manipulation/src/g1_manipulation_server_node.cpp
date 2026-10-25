@@ -6,6 +6,7 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/utils.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Vector3.h>
 
@@ -361,6 +362,16 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // with the most room at the wrist (bestBranch).
     branch_tries_         = declare_parameter<int>("branch_tries", 16);
     branch_rise_extra_m_  = declare_parameter<double>("branch_rise_extra_m", 0.14);
+    // ... and that has the most room to move up there (branch_room_m each way).
+    branch_room_m_ = declare_parameter<double>("branch_room_m", 0.08);
+    // A place into a nest that the held part cannot reach from here looks for the nearest stance
+    // it can (within stance_search_m, up to 12 degrees turned; stance_search_tries / _s at most)
+    // and says where that is in stance_frame, for go_to_stance.py.
+    stance_search_m_     = declare_parameter<double>("stance_search_m", 0.14);
+    stance_search_tries_ = declare_parameter<int>("stance_search_tries", 400);
+    stance_search_s_     = declare_parameter<double>("stance_search_s", 20.0);
+    stance_frame_        = declare_parameter<std::string>("stance_frame", "odom");
+    stance_base_frame_   = declare_parameter<std::string>("stance_base_frame", "base_footprint");
     // Place: how far the tracked part may be from where the hand holds it before the place
     // warns that the camera's part of that name is not the one in the hand (a warning only).
     held_check_m_ = declare_parameter<double>("held_check_m", 0.12);
@@ -1448,7 +1459,8 @@ bool G1ManipulationServer::moveToJoints(MoveGroup& group, const std::map<std::st
 bool G1ManipulationServer::moveOwnLine(
     MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& goal,
     const std::string& what, double slack_deg, bool exact_end, double* reached, double tilt_deg,
-    const std::map<std::string, double>* from_joints, bool dry_run, double* wrist_margin)
+    const std::map<std::string, double>* from_joints, bool dry_run, double* wrist_margin,
+    std::map<std::string, double>* end_joints)
 {
     if (reached != nullptr)
     {
@@ -1734,6 +1746,14 @@ bool G1ManipulationServer::moveOwnLine(
     {
         *wrist_margin = margin;
     }
+    if (end_joints != nullptr)
+    {
+        end_joints->clear();
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            (*end_joints)[names[i]] = q[i];
+        }
+    }
     if (dry_run)
     {
         if (reached != nullptr)
@@ -1866,6 +1886,20 @@ std::optional<std::map<std::string, double>> G1ManipulationServer::bestBranch(
         {
             continue;
         }
+        // Not through the body: of the arm's answers for a scoop at the table most cross the
+        // chest (shoulder roll inward) and are only numbers.
+        bool body = false;
+        for (const std::string& pair : collisionsAt(group, joints))
+        {
+            body = body || ((pair.find("torso") != std::string::npos || pair.find("pelvis") != std::string::npos ||
+                             pair.find("logo") != std::string::npos || pair.find("head") != std::string::npos) &&
+                            (pair.find("shoulder") != std::string::npos || pair.find("elbow") != std::string::npos ||
+                             pair.find("wrist") != std::string::npos));
+        }
+        if (body)
+        {
+            continue;
+        }
         bool same = false;
         for (const auto& f : found)
         {
@@ -1887,13 +1921,53 @@ std::optional<std::map<std::string, double>> G1ManipulationServer::bestBranch(
     std::string list;
     for (const auto& f : found)
     {
-        double     reached = 0.0;
-        double     margin  = 0.0;
-        const bool done    = moveOwnLine(*mg, link, up, "branch check", 0.0, false, &reached, 0.0, &f, true, &margin);
-        // Rising all the way first, then the most room left at the wrist.
-        const double score = (done ? 10.0 : reached) + margin;
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s%.0f%%/%.2f", list.empty() ? "" : ", ", 100.0 * reached, margin);
+        double                        reached = 0.0;
+        double                        margin  = 0.0;
+        std::map<std::string, double> top;
+        const bool done = moveOwnLine(*mg, link, up, "branch check", 0.0, false, &reached, 0.0, &f, true, &margin, &top);
+        // Room to move from the top of the raise, where the place starts: the hand branch_room_m
+        // each way (forward, back, left, right, up, down), turned 12 degrees either way about
+        // the vertical, the part level. Elbow up, the arm managed 4 of the 12 and could not
+        // reach a nest from a stance 8 cm off; elbow down, 7.
+        int placed = 0;
+        if (done)
+        {
+            moveit::core::RobotState t(*now);
+            for (const auto& [name, value] : top)
+            {
+                t.setVariablePosition(name, value);
+            }
+            t.update();
+            const Eigen::Isometry3d  e = t.getGlobalLinkTransform(link);
+            const Eigen::Quaterniond eq(e.rotation());
+            tf2::Vector3 a = up_.cross(tf2::Vector3(1.0, 0.0, 0.0));
+            if (a.length() < 1e-3)
+            {
+                a = up_.cross(tf2::Vector3(0.0, 1.0, 0.0));
+            }
+            a.normalize();
+            const tf2::Vector3              b    = up_.cross(a);
+            const std::vector<tf2::Vector3> dirs = { a, -a, b, -b, up_, -up_ };
+            for (const tf2::Vector3& dv : dirs)
+            {
+                for (const double yaw : { -12.0, 12.0 })
+                {
+                    geometry_msgs::msg::Pose g;
+                    g.position.x = e.translation().x() + branch_room_m_ * dv.x();
+                    g.position.y = e.translation().y() + branch_room_m_ * dv.y();
+                    g.position.z = e.translation().z() + branch_room_m_ * dv.z();
+                    tf2::Quaternion turn;
+                    turn.setRotation(up_, yaw * M_PI / 180.0);
+                    g.orientation = tf2::toMsg((turn * tf2::Quaternion(eq.x(), eq.y(), eq.z(), eq.w())).normalized());
+                    placed += moveOwnLine(*mg, link, g, "branch check", 0.0, true, nullptr, 0.0, &top, true) ? 1 : 0;
+                }
+            }
+        }
+        // Rising all the way first, then the most room to move up there, then at the wrist.
+        const double score = (done ? 100.0 : reached) + 2.0 * placed + margin;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s%.0f%%/%d of 12/%.2f", list.empty() ? "" : ", ", 100.0 * reached, placed,
+                      margin);
         list += buf;
         if (score > best_score)
         {
@@ -1901,9 +1975,97 @@ std::optional<std::map<std::string, double>> G1ManipulationServer::bestBranch(
             best       = f;
         }
     }
-    RCLCPP_INFO(get_logger(), "%s at the grasp: %zu arm configurations (rise %.0f cm / wrist room, rad: %s); took "
-                "the one scoring %.2f", group.c_str(), found.size(), 100.0 * rise_m, list.c_str(), best_score);
+    std::string chosen;
+    if (best)
+    {
+        for (const std::string& name : names)
+        {
+            chosen += (chosen.empty() ? "" : ", ") + std::to_string(best->at(name)).substr(0, 5);
+        }
+    }
+    RCLCPP_INFO(get_logger(),
+                "%s at the grasp: %zu arm configurations (rise %.0f cm / room to move up there / wrist room, rad: %s); "
+                "took (%s), scoring %.2f",
+                group.c_str(), found.size(), 100.0 * rise_m, list.c_str(), chosen.c_str(), best_score);
     return best;
+}
+
+std::optional<G1ManipulationServer::StanceFix> G1ManipulationServer::stanceFor(
+    MoveGroup& group, const std::string& link, const geometry_msgs::msg::Pose& above,
+    const geometry_msgs::msg::Pose& in)
+{
+    // Ground-plane axes in the planning frame: forward and left, level.
+    tf2::Vector3 fwd = tf2::Vector3(1.0, 0.0, 0.0) - up_ * up_.x();
+    fwd.normalize();
+    const tf2::Vector3 left = up_.cross(fwd);
+    struct Try
+    {
+        double dx, dy, dyaw, cost;
+    };
+    std::vector<Try> tries;
+    for (const double dyaw : { 0.0, 4.0, -4.0, 8.0, -8.0, 12.0, -12.0 })
+    {
+        for (double r = 0.0; r <= stance_search_m_ + 1e-9; r += 0.02)
+        {
+            const int n = r < 1e-9 ? 1 : static_cast<int>(std::ceil(2.0 * M_PI * r / 0.02));
+            for (int k = 0; k < n; ++k)
+            {
+                const double a = 2.0 * M_PI * k / n;
+                tries.push_back({ r * std::cos(a), r * std::sin(a), dyaw, r + 0.004 * std::abs(dyaw) });
+            }
+        }
+    }
+    std::stable_sort(tries.begin(), tries.end(), [](const Try& a, const Try& b) { return a.cost < b.cost; });
+    const auto seen_from = [&](const Try& t, const geometry_msgs::msg::Pose& p) {
+        tf2::Quaternion turn;
+        turn.setRotation(up_, t.dyaw * M_PI / 180.0);
+        const tf2::Transform moved(turn, fwd * t.dx + left * t.dy);  // the robot's new pelvis, in the old
+        tf2::Transform       g;
+        tf2::fromMsg(p, g);
+        geometry_msgs::msg::Pose out;
+        tf2::toMsg(moved.inverse() * g, out);
+        return out;
+    };
+    const auto t0 = std::chrono::steady_clock::now();
+    int        tested = 0;
+    for (const Try& t : tries)
+    {
+        if (++tested > stance_search_tries_ ||
+            std::chrono::steady_clock::now() - t0 > std::chrono::duration<double>(stance_search_s_))
+        {
+            break;
+        }
+        std::map<std::string, double> top;
+        if (!moveOwnLine(group, link, seen_from(t, above), "stance check", 20.0, true, nullptr, 0.0, nullptr, true,
+                         nullptr, &top) ||
+            !moveOwnLine(group, link, seen_from(t, in), "stance check", 0.0, true, nullptr, 0.0, &top, true))
+        {
+            continue;
+        }
+        // Where that is in odom: the robot's ground frame now, moved by the same.
+        StanceFix fix{ t.dx, t.dy, t.dyaw, 0.0, 0.0, 0.0 };
+        try
+        {
+            const auto tr = tf_buffer_->lookupTransform(stance_frame_, stance_base_frame_, tf2::TimePointZero,
+                                                        tf2::durationFromSec(0.5));
+            const double yaw = tf2::getYaw(tr.transform.rotation);
+            fix.x       = tr.transform.translation.x + std::cos(yaw) * t.dx - std::sin(yaw) * t.dy;
+            fix.y       = tr.transform.translation.y + std::sin(yaw) * t.dx + std::cos(yaw) * t.dy;
+            fix.yaw_deg = (yaw * 180.0 / M_PI) + t.dyaw;
+        }
+        catch (const tf2::TransformException& e)
+        {
+            RCLCPP_WARN(get_logger(), "place: no %s -> %s for the stance advice: %s", stance_frame_.c_str(),
+                        stance_base_frame_.c_str(), e.what());
+            return std::nullopt;
+        }
+        RCLCPP_INFO(get_logger(), "place: the nest is in reach from %.0f cm forward, %.0f cm left, %+.0f deg (%d tried)",
+                    100.0 * t.dx, 100.0 * t.dy, t.dyaw, tested);
+        return fix;
+    }
+    RCLCPP_WARN(get_logger(), "place: no stance within %.0f cm / 12 deg of here puts the nest in reach (%d tried)",
+                100.0 * stance_search_m_, tested);
+    return std::nullopt;
 }
 
 bool G1ManipulationServer::moveBothTo(
@@ -2378,12 +2540,49 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     // roll at its limit, and from there neither raise_<cm> nor the place could
                     // follow a straight line.
                     std::optional<bool> grasp_ik;
+                    bool                chained = false;  // entry and hover worked out from it
                     if (const auto b = bestBranch(ctx.arm_group, ctx.grasp_frame, at.grasp,
                                                   lift_height_m_ + branch_rise_extra_m_, branch_tries_,
                                                   scoop_variant_ik_timeout_s_))
                     {
                         grasp_joints = *b;
                         grasp_ik     = true;
+                        // The slide's start and the hover above it on the SAME arm configuration,
+                        // by this node's own lines back from the grasp: an IK answer for each,
+                        // even seeded, came back on another configuration (elbow up) and the arm
+                        // arrived in that one, undoing the choice.
+                        MoveGroup* const              g = groupFor(ctx.arm_group);
+                        std::map<std::string, double> e, p;
+                        chained = g != nullptr &&
+                                  moveOwnLine(*g, ctx.grasp_frame, *at.entry, "branch chain", 0.0, true, nullptr,
+                                              0.0, &grasp_joints, true, nullptr, &e) &&
+                                  collisionsAt(ctx.arm_group, e).empty() &&
+                                  moveOwnLine(*g, ctx.grasp_frame, at.pregrasp, "branch chain", 0.0, true, nullptr,
+                                              0.0, &e, true, nullptr, &p) &&
+                                  collisionsAt(ctx.arm_group, p).empty();
+                        if (chained)
+                        {
+                            entry_joints      = e;
+                            at.pregrasp_joints = p;
+                        }
+                        else
+                        {
+                            std::string why = e.empty() ? "the slide back from the grasp does not go" : "";
+                            if (why.empty())
+                            {
+                                const auto ce = collisionsAt(ctx.arm_group, e);
+                                why = !ce.empty() ? "the slide's start collides: " + ce.front() :
+                                      p.empty()   ? "the rise to the hover does not go" :
+                                                    "the hover collides: " +
+                                                        (collisionsAt(ctx.arm_group, p).empty() ?
+                                                             std::string("?") :
+                                                             collisionsAt(ctx.arm_group, p).front());
+                            }
+                            RCLCPP_WARN(get_logger(),
+                                        "pick %s: the chosen arm configuration has no clear way down to the "
+                                        "table (%s); the IK's own answer instead",
+                                        object_id.c_str(), why.c_str());
+                        }
                     }
                     else
                     {
@@ -2418,7 +2617,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     // with the hand palm up near the body's middle, KDL's first answer often
                     // swings the shoulder into the torso, and the planner then rejects the goal.
                     const char* missing = !*grasp_ik ? "the grasp" :
-                                          !hasIk(
+                                          !chained && !hasIk(
                                                ctx.arm_group,
                                                ctx.grasp_frame,
                                                *at.entry,
@@ -2431,7 +2630,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                                                &grasp_joints)
                                                   .value_or(false) ? "the start (collision-free)" :
                                           !reach(ctx, lifted)    ? "the lift" :
-                                          !hasIk(
+                                          !chained && !hasIk(
                                                ctx.arm_group,
                                                ctx.grasp_frame,
                                                at.pregrasp,
@@ -2946,7 +3145,9 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     // If the straight line down is blocked -- on some arm configurations the wrist brushes the
     // torso a few millimetres into it -- the same point is planned to instead: the hover is free
     // space, and only the arrival has to be exact.
-    if (entry_goal && !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent") &&
+    // This node's own line first, so the arm stays on the configuration chosen for carrying.
+    if (entry_goal && !moveOwnLine(*arm_group, arm.grasp_frame, *entry_goal, "scoop descent", 0.0, true) &&
+        !moveLinear(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent") &&
         !moveTo(*arm_group, *entry_goal, arm.grasp_frame, "scoop descent, planned"))
     {
         fail(
@@ -3039,7 +3240,8 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
 
     // Straight in for a published grasp: the parts beside it are close, and a free-space plan
     // may swing the fingers through them.
-    if (!(grasp_pose ? moveLinear(*arm_group, grasp_goal, arm.grasp_frame, "approach")
+    if (!(grasp_pose ? moveOwnLine(*arm_group, arm.grasp_frame, grasp_goal, "approach", 0.0, true) ||
+                           moveLinear(*arm_group, grasp_goal, arm.grasp_frame, "approach")
                      : moveTo(*arm_group, grasp_goal, arm.grasp_frame, "approach")))
     {
         fail(Pick::Feedback::PHASE_APPROACH, "could not reach the grasp pose");
@@ -3814,10 +4016,33 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
               moveTo(*arm_group, preplace, arm.grasp_frame, "preplace")))
     {
         end_hand_exemption();
+        // Out of the arm's reach as it holds the part: where would the robot have to stand? The
+        // arm's configuration is fixed by how the part was picked (at a table, only one that
+        // does not pass through the body), so the stance is what can change.
+        std::string advice;
+        if (straight_only)
+        {
+            const std::string why = last_own_why_;
+            if (const auto st = stanceFor(*arm_group, arm.grasp_frame, preplace, place_goal))
+            {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf),
+                              " It goes from %.0f cm %s and %.0f cm %s%s: go_to_stance.py --x %.3f --y %.3f "
+                              "--yaw-deg %.1f, then place again [stance x=%.3f y=%.3f yaw_deg=%.1f]",
+                              std::abs(st->dx) * 100.0, st->dx >= 0.0 ? "forward" : "back", std::abs(st->dy) * 100.0,
+                              st->dy >= 0.0 ? "to the left" : "to the right",
+                              std::abs(st->dyaw_deg) > 0.5 ?
+                                  (", turned " + std::to_string(static_cast<int>(std::round(st->dyaw_deg))) + " deg").c_str() :
+                                  "",
+                              st->x, st->y, st->yaw_deg, st->x, st->y, st->yaw_deg);
+                advice = buf;
+            }
+            last_own_why_ = why;
+        }
         fail(
             Place::Feedback::PHASE_PREPLACE,
             straight_only ? "the straight line above the nest does not go from here: " + last_own_why_ +
-                                ". Nothing was swung" :
+                                ". Nothing was swung." + advice :
                             "could not reach the pose above the target");
         return;
     }
@@ -4019,9 +4244,13 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
     if (scooped)
     {
         const geometry_msgs::msg::Pose out = slideBack(place_goal, scoop_slide_m_, up_);
-        // Out of a slot: most of the way is out from under the part (the rest is clear air).
-        double slid = 0.0;
-        if (!(is_slot ? moveOwnLine(*arm_group, arm.grasp_frame, out, "slide out", 0.0, true, &slid) || slid >= 0.8
+        // Out of a slot: the hand straight back as it slid in; if the arm runs out of reach on
+        // the way, the rest from there with the hand free to turn up to 10 degrees. 70% of the
+        // slide (8 of 11 cm) is out from under the part; the retreat then goes up.
+        double slid = 0.0, more = 0.0;
+        if (!(is_slot ? moveOwnLine(*arm_group, arm.grasp_frame, out, "slide out", 0.0, true, &slid) ||
+                            moveOwnLine(*arm_group, arm.grasp_frame, out, "slide out, turning", 10.0, false, &more) ||
+                            slid + (1.0 - slid) * more >= 0.7
                       : moveLinear(*arm_group, out, arm.grasp_frame, "slide out", slot_jump)))
         {
             fail(Place::Feedback::PHASE_RETREAT, "could not slide the hand out from under the part");

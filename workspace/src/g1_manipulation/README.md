@@ -270,9 +270,17 @@ result:
   ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: left, hands: 1}" --feedback
   ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: raise_14}" --feedback
   ros2 run g1_manipulation go_to_stance.py pallet_approach_left
-  ros2 run g1_manipulation go_to_stance.py pallet_end_left
-  ros2 action send_goal /g1_manipulation_server/place g1_msgs/action/Place "{surface_object_id: pallet/slot/nest_4, arm: auto}" --feedback
+  ros2 run g1_manipulation place_in_nest.py nest_4
   ```
+
+  `place_in_nest.py` walks to `pallet_end_left` and places into the nest; when the place says the
+  nest is out of the arm's reach from where the walk stopped, it walks to the stance the place
+  names and places again (`--tries`, 3). The held part's arm configuration is fixed by the pick
+  (at the table only the elbow-up one does not pass through the body) and leaves the hand little
+  room: from a stance 8 cm off, the nest was out of reach. A place into a nest that cannot start
+  therefore searches the nearest stance (within `stance_search_m`, 14 cm, and 12 degrees) from
+  which the held part goes above the nest and down into it, and ends its message with
+  `go_to_stance.py --x .. --y .. --yaw-deg ..` and `[stance x=.. y=.. yaw_deg=..]`.
 
   The next panel goes to `pallet/slot/nest_3` from the same stance. `raise_14` lifts the hand
   14 cm straight up from wherever the pick left it, turned as it is (any `raise_<cm>` up to 40
@@ -294,9 +302,13 @@ result:
   the octomap. The raise goes straight up only (it no longer draws the hand toward the body:
   that brought a panel to the robot's head); where straight up does not go, the same height a
   few centimetres to a side, the panel always level. The scoop takes the panel in the arm
-  configuration, of several IK solutions, that can then lift and raise it straight up with the
-  most room left at the wrist (`bestBranch`, `branch_tries`): the first IK answer often had the
-  wrist roll at its limit after the pick, and from there nothing could follow a straight line.
+  configuration, of several IK solutions not passing through the body, that can then lift and
+  raise it straight up with the most room to move up there (`branch_room_m` each way) and at
+  the wrist (`bestBranch`, `branch_tries`). The hover above the table and the start of the
+  slide are worked out from that configuration by the same own lines, and the descent and the
+  slide in run on them, so the arm arrives in it; where that way down would touch the body the
+  IK's own answer is used, as before. With the hand held still the elbow cannot be turned down
+  (the wrist roll and shoulder yaw reach their limits within a few centimetres).
   A place whose nest is turned more than 20 degrees from the panel's heading in the hand stops
   and says which way and how far to turn the robot. If a line stops -- a collision ahead, or the arm at
   the end of its reach -- it says where and why (`raise_14: stopped at 41% of the line: ... at
@@ -315,7 +327,10 @@ result:
   from the nest's pose and let go, the panel never touching the robot's body or head, from
   stances at the tray across `go_to_stance.py`'s tolerance (`panel_1_left`, and turned -18 and
   -2 degrees instead of -10). Picked from a stance turned 20 degrees the panel sits 19 degrees
-  off in the hand and the place says to turn the robot by that much. The right hand's pick
+  off in the hand and the place says to turn the robot by that much. From `pallet_end_left` 8
+  cm to the right the place said "1 cm forward and 6 cm to the left" and from there set nest_4
+  down 4 mm off; from 6 cm back, 2 cm right and turned 4 degrees, nest_3 the same way (10 mm),
+  each through `place_in_nest.py` (the harness's go_to_stance teleports). The right hand's pick
   still goes through. Where the left pick at the tray went through
   (it misses about half the time there, knocking the panel), the place went through every
   time. Needs the simulator
