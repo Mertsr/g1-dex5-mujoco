@@ -1,0 +1,22 @@
+# Overlay on nav2_params.yaml for the conveyor worlds (world:=conveyor, conveyor_flat,
+# conveyor_fixed, conveyor2), applied after it so these values win.
+#
+# The facility's 0.45 m robot radius and 0.85 m inflation do not fit this room: the robot spawns
+# 0.26 m from the belt's nearest leg, and where it stands to work -- in front of the table, at the
+# belt's start -- is 0.31-0.37 m from the nearest obstacle (measured on maps/conveyor). With 0.45 m
+# the start itself is in collision and the planner refuses every goal. 0.22 m is the body's own
+# half-width at the shoulders; the inflation keeps paths off the furniture without closing the
+# gaps the robot has to stand in. Walk slowly near the belt: the gait's lateral drift is what the
+# facility's larger radius was covering.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      robot_radius: 0.22
+      inflation_layer:
+        inflation_radius: 0.40
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      robot_radius: 0.22
+      inflation_layer:
+        inflation_radius: 0.40

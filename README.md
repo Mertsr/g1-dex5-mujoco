@@ -1,223 +1,201 @@
-# G1 basic: simulation, walking, Nav2 and the conveyor world
+# G1 Basic — Simülasyon, Yürüme, Nav2 ve Conveyor Dünyası
 
-A ROS 2 Humble stack for the [Unitree G1](https://www.unitree.com/g1) humanoid (29 DoF, RH56E2
-hands), developed simulation-first against `unitree_mujoco`. This branch is the basic subset:
+Unitree G1 insansı robotu (29 serbestlik derecesi, RH56E2 eller) için ROS 2 Humble tabanlı bir
+yazılım yığınının **temel sürümü**. Robot MuJoCo simülasyonunda, gerçek robotla aynı DDS
+topic'lerini konuşarak çalışır; yürür, haritasını çıkarır, kendini haritada bulur ve Nav2 ile
+verilen hedefe kendi gider.
 
-- **Simulation:** MuJoCo with the simulated Mid360 LiDAR and head depth camera, speaking the same
-  DDS topics as the real robot.
-- **Walking:** a learned walking policy under the onboard-controller stand-in, driven through the
-  LocoClient bridge with a gait shaper and a locomotion-authority bracket.
-- **Navigation:** SLAM Toolbox mapping, AMCL localization against a committed map, and Nav2.
-- **Worlds:** the multi-room facility (`world:=navigation`, map `facility`) and the conveyor line
-  (`world:=conveyor`, `conveyor_flat`, `conveyor_fixed`, `conveyor2`, map `conveyor`): a room
-  with a table of BSH panels, a belt and a pallet that rides it.
+Bu dal, sistemi incelemek isteyenler için hazırlandı. İçinde **simülasyon, yürüme ve navigasyon**
+var; nesne algılama (perception), kol ile manipülasyon (pick & place), MoveIt ve görev
+orkestrasyonu bu sürümde **yok**.
 
-Object perception and manipulation are not part of this branch.
-
-Based on [grove-g1](https://github.com/Adyansh04/grove-g1) (BSD-3-Clause, see `LICENSE`).
-
-On hardware the simulation card becomes the vendor's onboard motion service and the LiDAR front
-end becomes `livox_ros_driver2`. Everything above the DDS rail is unchanged.
-
-Two rules shape the design, and both apply in simulation so the habits transfer:
-
-- Only one publisher ever commands a low-level channel. Control-mode ownership is explicit.
-- Arm motion goes through `rt/arm_sdk`, which blends against the onboard balance controller.
-  Commanding raw `/lowcmd` means owning balance yourself.
-
-## Packages
-
-| Package | What it does |
+| Var | Yok |
 |---|---|
-| [`g1_bringup`](workspace/src/g1_bringup) | The entry point. Launch files, scenes and config that compose everything below. |
-| [`g1_description`](workspace/src/g1_description) | Vendored G1 URDF plus the `ros2_control` xacro wrapper. |
-| [`g1_hand_interface`](workspace/src/g1_hand_interface) | `ros2_control` plugin for one hand, over the hand's own DDS topics. |
-| [`g1_hardware_interface`](workspace/src/g1_hardware_interface) | `ros2_control` plugin bridging the 14 arm joints onto `rt/arm_sdk`. |
-| [`g1_locomotion`](workspace/src/g1_locomotion) | LocoClient bridge, gait shaper and the locomotion-authority bracket. |
-| [`g1_motion_service_sim`](workspace/src/g1_motion_service_sim) | Simulation stand-in for the robot's onboard motion service. |
-| [`g1_msgs`](workspace/src/g1_msgs) | The `SetLocoMode`, `ApproachObject` and `Retreat` actions and the `LocoStatus` message. |
-| [`g1_navigation`](workspace/src/g1_navigation) | SLAM Toolbox mapping, AMCL localization and Nav2. |
-| [`g1_sensor_relay`](workspace/src/g1_sensor_relay) | Publishes LiDAR and depth frames sampled inside the simulator. |
-| [`g1_state_estimation`](workspace/src/g1_state_estimation) | Publishes `odom` to `base_footprint` and the TF chain Nav2 needs. |
+| MuJoCo simülasyonu (Mid360 LiDAR ve kafa kamerası simüle) | Nesne algılama / takip |
+| Öğrenilmiş yürüme politikası, LocoClient köprüsü | Kol ile pick & place |
+| SLAM Toolbox ile harita çıkarma | MoveIt planlama |
+| AMCL ile haritada konum bulma | Davranış ağacı ile görev akışı |
+| Nav2 ile hedefe gitme | |
+| Tesis dünyası ve conveyor hattı dünyası | |
 
-## Quick start
+## Dünyalar
 
-The ROS build and runtime commands run inside the dev container. The host is Ubuntu 24.04; the
-container provides the Ubuntu 22.04 and ROS 2 Humble combination the Unitree SDK needs.
+| `world:=` | Ne var | Harita |
+|---|---|---|
+| `navigation` (varsayılan) | Dört odalı tesis: raflar, çalışma tezgâhı, kolonlar, rampa | `facility` |
+| `conveyor_fixed` | Conveyor hattı odası: BSH panelli masa, bant, bant üzerinde palet | `conveyor` |
+| `conveyor`, `conveyor_flat`, `conveyor2` | Aynı oda; masadaki parçalar farklı | `conveyor` |
 
-### Prerequisites
+Harita dünyaya göre otomatik seçilir; `map:=<dosya.yaml>` ile değiştirilebilir. Conveyor odası
+dar olduğu için orada Nav2 robotu 0.45 m yerine 0.22 m yarıçaplı sayar
+(`g1_navigation/config/nav2_world_conveyor.yaml`). Conveyor haritası sahnenin geometrisinden
+üretilmiştir (LiDAR'ın gördüğü 0.30–1.50 m yükseklik bandı):
 
-Install Docker Engine with Docker Compose v2, the NVIDIA driver and NVIDIA Container Toolkit on
-the host. The simulator uses the GPU exposed by `docker-compose.yml`. For the GUI modes, run from
-an X11 desktop session; `manage.sh start` grants the container local X11 access.
+![Conveyor haritası](docs/conveyor_map.png)
 
-Install [`vcstool`](https://github.com/dirk-thomas/vcstool) on the host as well. The import script
-uses its `vcs` command before the development container exists:
+## Kurulum
 
-```bash
-python3 -m pip install --user vcstool
-```
+Gereken: Ubuntu (ana makine), Docker Engine + Docker Compose v2, NVIDIA sürücüsü ve NVIDIA
+Container Toolkit, `vcstool` (`python3 -m pip install --user vcstool`). Arayüzlü modlar için X11
+masaüstü oturumu.
 
-### Start the development container
-
-Run these commands from the repository root on the host:
+ROS tarafının hepsi geliştirme konteynerinin içinde çalışır (Ubuntu 22.04 + ROS 2 Humble; Unitree
+SDK'sının istediği ikili bu).
 
 ```bash
+git clone -b merts-g1-basic https://github.com/Mertsr/g1-dex5-mujoco g1-basic
+cd g1-basic
 cp .env.example .env
-./scripts/import-externals.sh
-./scripts/manage.sh start
-./scripts/manage.sh exec
+./scripts/import-externals.sh      # workspace.repos'taki üçüncü parti paketleri çeker
+./scripts/manage.sh start          # imajı kurar (simülatör dahil) ve konteyneri başlatır
+./scripts/manage.sh exec           # konteynerde kabuk açar
 ```
 
-`import-externals.sh` pulls the third-party packages listed in `workspace.repos` into
-`workspace/src` and puts the two that ship a non-standard layout into a buildable one. Run it
-again whenever `workspace.repos` changes.
-
-### Build and run the stack
-
-Inside the container:
+Konteynerin içinde derleme:
 
 ```bash
 cd /root/workspace
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 source install/setup.bash
 ```
 
-Then bring up the robot. One command covers every mode:
+## Çalıştırma
+
+Tek giriş noktası `g1_bringup/bringup.launch.py`:
 
 ```bash
-# Simulator only, with the MuJoCo viewer
+# Sadece simülatör, MuJoCo penceresi açık
 ros2 launch g1_bringup bringup.launch.py headless:=false
 
-# Build a map, with RViz but without the MuJoCo viewer
-ros2 launch g1_bringup bringup.launch.py mode:=mapping rviz:=true headless:=true
-
-# Localize against the committed map and navigate, with RViz but without the MuJoCo viewer
-ros2 launch g1_bringup bringup.launch.py mode:=localization nav:=true rviz:=true headless:=true
-
-# The conveyor world: localize against maps/conveyor and navigate, with the MuJoCo viewer
+# Conveyor dünyası: haritada konum bul + Nav2, RViz ve MuJoCo penceresi açık
 ros2 launch g1_bringup bringup.launch.py \
   world:=conveyor_fixed mode:=localization nav:=true rviz:=true headless:=false
+
+# Tesis dünyası: aynı şey
+ros2 launch g1_bringup bringup.launch.py mode:=localization nav:=true rviz:=true
+
+# Yeni harita çıkarmak (robotu gezdirip map_saver_cli ile kaydet)
+ros2 launch g1_bringup bringup.launch.py world:=conveyor_fixed mode:=mapping rviz:=true
 ```
 
-The map follows the world (`facility` for `navigation`, `conveyor` for the conveyor worlds);
-`map:=<file.yaml>` overrides it. The conveyor map is built from the scene geometry by
-`g1_bringup/tools/make_conveyor_map.py`, see `g1_navigation/maps/README.md`. The first time a
-conveyor world starts, the launch copies the panel mesh (`g1_bringup/cad/BSH_panel.stl`) into the
-simulator's model directory.
+| Argüman | Varsayılan | Anlamı |
+|---|---|---|
+| `world` | `navigation` | Hangi dünya (yukarıdaki tablo) |
+| `mode` | `none` | `none`: sadece simülatör. `mapping`: SLAM ile harita çıkarır. `localization`: kayıtlı haritada AMCL ile konum bulur |
+| `nav` | `false` | Nav2'yi başlatır; `mode:=localization` ister |
+| `map` | boş | Konum bulmada kullanılacak harita; boşsa dünyanın kendi haritası |
+| `rviz` | `false` | RViz'i açar (navigasyon modlarında harita, costmap ve planla) |
+| `headless` | `true` | `false` MuJoCo penceresini açar |
+| `walk_policy` | `walker` | Yürüme politikası: `walker` veya `isaaclab` |
+| `odometry` | `sportmodestate` | `sportmodestate`: simülatörden kusursuz odometri. `fast_lio`: gerçek robottaki LiDAR-ataletsel odometri |
 
-`headless:=true` is the default and is appropriate for non-GUI runs. Set `headless:=false` only
-when a local display is available to open the MuJoCo viewer; do not use the viewer's Reload button
-while sensors are running.
+### Robotu bir hedefe göndermek
 
-After launching a mode, confirm that the ROS graph is available from a second container shell:
-
-```bash
-ros2 topic list -t
-```
-
-Send it somewhere:
+RViz'deki **2D Goal Pose** aracıyla haritaya tıklamak yeterli. Komut satırından:
 
 ```bash
+# Conveyor dünyası: masanın önü (görseldeki kırmızı nokta)
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: 1.06, y: -0.90}, orientation: {w: 1.0}}}}"
+
+# Conveyor dünyası: paletin başı (yeşil nokta)
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: -0.50, y: 0.42}, orientation: {w: 1.0}}}}"
+
+# Tesis dünyası
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
   "{pose: {header: {frame_id: map}, pose: {position: {x: 2.5, y: -2.5}, orientation: {w: 1.0}}}}"
 ```
 
-In the conveyor world, for example in front of the table (`x` toward the table, `y` to its side):
+Robot dünyanın orijininde (0, 0) başlar ve AMCL'nin başlangıç konumu da odur; ek bir ayar
+gerekmez.
+
+### Robotu elle yürütmek
 
 ```bash
-ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-  "{pose: {header: {frame_id: map}, pose: {position: {x: 0.8, y: -0.9}, orientation: {w: 1.0}}}}"
+ros2 action send_goal /g1_loco_bridge/set_mode g1_msgs/action/SetLocoMode "{fsm_id: 4}"    # ayağa kalk
+ros2 action send_goal /g1_loco_bridge/set_mode g1_msgs/action/SetLocoMode "{fsm_id: 500}"  # yürümeye başla
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -r /cmd_vel:=/g1_loco_bridge/cmd_vel -p speed:=0.6 -p turn:=1.57
 ```
 
-## Development environment
+`speed` ve `turn` değerleri önemli: varsayılanlar yürüyüşün ölü bölgesinde kalır ve robot
+kıpırdamaz.
 
-Docker Compose is the runtime source of truth; `.devcontainer/devcontainer.json` is the VS Code
-layer on top. In VS Code, use `Dev Containers: Reopen in Container`.
+## Mimari
 
-| Setting | Value |
+```mermaid
+flowchart LR
+    subgraph SIM["Simülasyon"]
+        MJ["unitree_mujoco<br/>(robot, LiDAR, kamera)"]
+        MS["g1_motion_service_sim<br/>(yürüme politikası)"]
+    end
+    MJ -- "DDS: lowstate / lowcmd" --> MS
+    MJ -- "LiDAR, kamera" --> SR["g1_sensor_relay"]
+    MS --> SE["g1_state_estimation<br/>odom → base_footprint"]
+    SR -- "/livox/lidar" --> NAV["g1_navigation<br/>SLAM / AMCL / Nav2"]
+    SE --> NAV
+    NAV -- "/cmd_vel" --> GS["g1_gait_shaper"]
+    GS --> BR["g1_loco_bridge<br/>(LocoClient)"]
+    BR -- "DDS: sport istekleri" --> MS
+```
+
+Simülatör, gerçek robotla aynı DDS topic'lerini kullanır; gerçek robota geçişte simülasyon kartı
+robotun kendi hareket servisiyle, LiDAR ön ucu `livox_ros_driver2` ile yer değiştirir, üstteki her
+şey aynı kalır. Tasarımın iki kuralı:
+
+- Bir alt seviye kanala her zaman tek bir yayıncı komut verir; kontrol sahipliği açıktır.
+- Kol hareketi `rt/arm_sdk` üzerinden, robotun kendi denge kontrolcüsüyle harmanlanarak gider;
+  ham `/lowcmd` göndermek dengeyi üstlenmek demektir.
+
+## Paketler
+
+| Paket | Görevi |
 |---|---|
-| ROS distro | Humble, pinned. Unitree tests only Foxy and Humble. |
-| Middleware | CycloneDDS, pinned to loopback |
-| `ROS_DOMAIN_ID` | 1 |
-| Robot override | `GROVE_G1_ROS_DOMAIN_ID`, `GROVE_G1_CYCLONEDDS_URI`, `GROVE_G1_ROBOT_NIC` |
-| C++ standard | C++20 on GCC 11.4 |
-| Workspace | `/root/workspace` |
-| Shared data | `/root/data` |
+| [`g1_bringup`](workspace/src/g1_bringup) | Giriş noktası: launch dosyaları, sahneler (MJCF), ayarlar, conveyor araçları |
+| [`g1_description`](workspace/src/g1_description) | G1 URDF'i (RH56E2 ellerle) ve `ros2_control` sarmalayıcısı |
+| [`g1_motion_service_sim`](workspace/src/g1_motion_service_sim) | Robotun yerleşik hareket servisinin simülasyon karşılığı; yürüme politikasını çalıştırır |
+| [`g1_locomotion`](workspace/src/g1_locomotion) | LocoClient köprüsü, yürüyüş şekillendirici, hareket yetkisi |
+| [`g1_navigation`](workspace/src/g1_navigation) | SLAM Toolbox, AMCL, Nav2 ayarları ve haritalar |
+| [`g1_sensor_relay`](workspace/src/g1_sensor_relay) | Simülatörde örneklenen LiDAR ve kamera verisini ROS'a yayınlar |
+| [`g1_state_estimation`](workspace/src/g1_state_estimation) | `odom → base_footprint` ve Nav2'nin istediği TF zinciri |
+| [`g1_hardware_interface`](workspace/src/g1_hardware_interface) | Kol eklemlerini `rt/arm_sdk`'ya bağlayan `ros2_control` eklentisi |
+| [`g1_hand_interface`](workspace/src/g1_hand_interface) | El için `ros2_control` eklentisi |
+| [`g1_msgs`](workspace/src/g1_msgs) | `SetLocoMode`, `ApproachObject`, `Retreat` aksiyonları ve `LocoStatus` mesajı |
 
-The container runs `privileged` with `network_mode: host` and a `/dev` bind mount. That is
-deliberate for local robotics development: DDS discovery between the bare-DDS simulator and the
-ROS graph happens over loopback, and device access has to work.
+Her paketin kendi README'si (İngilizce) ayrıntıları, ölçümleri ve testleri anlatır.
 
-Pointing the container at a real G1 is three environment variables, not an image rebuild:
-`GROVE_G1_CYCLONEDDS_URI=file:///etc/cyclonedds/cyclonedds.hardware.xml` (baked in beside the
-loopback one, differing only in the interface), `GROVE_G1_ROBOT_NIC` for the NIC that reaches
-the robot, and `GROVE_G1_ROS_DOMAIN_ID` for its domain. They are prefixed because the base
-image's own `/etc/profile.d/10-ros-env.sh` rewrites the unprefixed names. `sim.launch.py`
-refuses to start unless `CYCLONEDDS_URI` names a profile that pins `lo`, so the simulator
-cannot be brought up pointing at a robot.
-
-Lifecycle:
-
-```bash
-./scripts/manage.sh start | stop | restart | recreate | logs | exec
-```
-
-Use `exec-as-me` instead of `exec` for anything that rewrites source files in place, such as
-`clang-tidy --fix` or `clang-format -i`. It runs as your host user, so the files do not come back
-owned by root.
-
-Project dependencies belong in `.devcontainer/Dockerfile`, followed by
-`./scripts/manage.sh recreate`. Do not install into a running container and forget about it.
-
-## Tests
+## Testler
 
 ```bash
 colcon test --packages-select g1_description g1_locomotion g1_navigation
 colcon test-result --all
 ```
 
-Leftover nodes from a previous run are the most productive source of phantom failures here:
-several copies of the stack on one DDS graph look like bugs everywhere except where they are.
-Clear them first, and note it verifies the graph rather than the process table:
+Simülatör başlatan testler zamanlamaya duyarlıdır ve `simulator` etiketi taşır:
+
+```bash
+colcon test --ctest-args -LE simulator   # simülatörsüz testler
+colcon test --ctest-args -L  simulator   # sadece simülatörlü testler (paket paket çalıştırın)
+```
+
+Önceki bir çalıştırmadan kalan düğümler hayalet hatalara yol açar; önce temizleyin:
 
 ```bash
 ./scripts/clean-stack.sh
 ```
 
-Suites that launch a simulator are timing-sensitive and serialize on a shared ctest resource lock.
-Run them **one package at a time**, and check nothing is left over from a previous run
-(`pgrep -x unitree_mujoco`) before trusting a result: a stray simulator is the usual explanation
-for a batch of failures that all pass on a clean rerun. Each package README says which of its
-tests need a simulator.
-
-Those suites carry the ctest label `simulator`, so the rest can be run on their own:
-
-```bash
-colcon test --ctest-args -LE simulator   # everything that needs no simulator
-colcon test --ctest-args -L  simulator   # only the simulator suites
-```
-
-## Continuous integration
-
-Every pull request, and every push to `main`, builds the workspace and runs the tests that need
-no simulator, in the image built by `.github/ci.Dockerfile`. Lint runs as part of `colcon test`,
-not separately.
-
-The simulator suites are excluded: they are CPU-time-sensitive and measure a shared runner
-rather than the stack. Run them locally before merging anything that touches locomotion,
-navigation or the sensor path.
-
-A per-package C++ coverage table is printed to each run's summary. It covers only the tests CI
-runs, so the node and launch layer reads low there by construction — it is a signal on the pure
-logic, not a figure for the repository, which is why there is no badge for it.
-
-## Repository layout
+## Depo yapısı
 
 ```
-.devcontainer/     derived dev image
-workspace/src/     ROS 2 packages
-workspace/patches/ patches applied to vendored sources at image build
-workspace/vendor/  our source compiled into the vendored simulator
-scripts/           container lifecycle, and stack teardown
+.devcontainer/      geliştirme imajı (simülatör dahil)
+workspace/src/      ROS 2 paketleri
+workspace/patches/  simülatöre imaj kurulurken uygulanan yamalar
+workspace/vendor/   simülatöre derlenen kendi kodumuz (sensörler, conveyor, el kaynağı)
+scripts/            konteyner yönetimi ve yığını temizleme
+docs/               README görselleri
 ```
+
+## Lisans
+
+[grove-g1](https://github.com/Adyansh04/grove-g1) temel alınmıştır; BSD-3-Clause (bkz. `LICENSE`).

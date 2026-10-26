@@ -103,6 +103,15 @@ def generate_launch_description():
         LaunchConfiguration("walk_policy"), "'.strip().lower() == 'isaaclab' else '",
         os.path.join(share, "config", "nav2_profile_walker.yaml"), "'",
     ])
+    # Per-world overlay, applied last: the conveyor room is too tight for the facility's robot
+    # radius and inflation (nav2_world_conveyor.yaml says why); every other world changes
+    # nothing. Covers both costmaps: the local one lives in controller_server, the global one
+    # in planner_server, and behavior_server reads the local one's footprint.
+    nav2_world = PythonExpression([
+        "'", os.path.join(share, "config", "nav2_world_conveyor.yaml"), "' if '",
+        LaunchConfiguration("world"), "'.strip().lower().startswith('conveyor') else '",
+        os.path.join(share, "config", "nav2_world_default.yaml"), "'",
+    ])
     # The params file cannot name its own package share, so the BT path is injected here.
     # Both trees, not just the one we use. bt_navigator loads every navigator's tree on
     # activate regardless of the navigators parameter (accepted but not honoured on Humble
@@ -124,7 +133,7 @@ def generate_launch_description():
                 executable="controller_server",
                 name="controller_server",
                 output="screen",
-                parameters=[configured_params, nav2_profile],
+                parameters=[configured_params, nav2_profile, nav2_world],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=controller_remappings,
             ),
@@ -133,7 +142,7 @@ def generate_launch_description():
                 executable="planner_server",
                 name="planner_server",
                 output="screen",
-                parameters=[configured_params],
+                parameters=[configured_params, nav2_world],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=remappings,
             ),
@@ -142,7 +151,7 @@ def generate_launch_description():
                 executable="behavior_server",
                 name="behavior_server",
                 output="screen",
-                parameters=[configured_params, nav2_profile],
+                parameters=[configured_params, nav2_profile, nav2_world],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=remappings,
             ),
@@ -308,6 +317,13 @@ def generate_launch_description():
             "profile: 'isaaclab' loads g1_gait_shaper_isaaclab.yaml (near-zero engage "
             "thresholds, that policy tracks slow commands); anything else loads "
             "g1_gait_shaper.yaml (walker.onnx's measured dead zone).",
+        ),
+        DeclareLaunchArgument(
+            "world",
+            default_value="navigation",
+            description="Which g1_bringup world the robot is in (inherited from bringup.launch.py "
+            "and nav_sim.launch.py). The conveyor worlds load nav2_world_conveyor.yaml on top: a "
+            "smaller robot radius and inflation for that room.",
         ),
         DeclareLaunchArgument(
             "use_composition",

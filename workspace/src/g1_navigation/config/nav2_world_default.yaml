@@ -1,0 +1,7 @@
+# Overlay on nav2_params.yaml for the world, applied after it: for world:=navigation (and any
+# world without its own file) nothing changes -- nav2_params.yaml is tuned for the facility's
+# rooms and corridors. Exists so nav2.launch.py can always pass a world file; the entry below
+# names no real node, so every server ignores it. See nav2_world_conveyor.yaml.
+g1_nav2_world_default_placeholder:
+  ros__parameters:
+    unused: true

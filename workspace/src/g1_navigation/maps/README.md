@@ -6,7 +6,9 @@
 reaches into the scan band (0.30-1.50 m) -- the walls, the belt, the table with the panels. 186 by
 174 cells at 5 cm, origin `[-4.05, -4.35]`; the robot spawns at the origin, which is AMCL's
 initial pose. `bringup.launch.py` picks it for the conveyor worlds, and `facility` for
-`world:=navigation`.
+`world:=navigation`. The room is tight -- the robot spawns 0.26 m from the belt -- so in the
+conveyor worlds Nav2 also loads `config/nav2_world_conveyor.yaml` (robot radius 0.22 m,
+inflation 0.40 m, instead of 0.45 and 0.85).
 
 ```bash
 python3 workspace/src/g1_bringup/tools/make_conveyor_map.py \
