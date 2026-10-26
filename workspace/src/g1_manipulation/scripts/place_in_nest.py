@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Walk to the pallet and put the held part into a nest, stepping to where the arm reaches it.
+"""Put the held part into a pallet nest from where the robot stands.
 
     ros2 run g1_manipulation place_in_nest.py nest_4
-    ros2 run g1_manipulation place_in_nest.py nest_3 --stance pallet_end_left --tries 3
+    ros2 run g1_manipulation place_in_nest.py nest_3 --walk          # walk first, step if needed
 
-Run it after the pick and raise_<cm> (the part held up, clear of the belt). It
+Run it after the pick and raise_<cm> (the part held up, clear of the belt), with the robot
+already at the pallet. By default it only places: it sends Place for pallet/slot/<nest> and
+never walks. If the nest is out of the arm's reach from where the robot stands, the result
+names the stance it is in reach from ("[stance x=.. y=.. yaw_deg=..]"); this prints the
+go_to_stance.py command for it and stops.
 
-1. walks to --stance with go_to_stance.py (unless --no-walk);
-2. sends Place for pallet/slot/<nest>;
-3. if the place says the nest is out of the arm's reach from where the robot stopped -- the
-   walk ends only within a few centimetres of a stance, and the arm, as it holds the part, has
-   little room -- the result names the stance it is in reach from
-   ("[stance x=.. y=.. yaw_deg=..]"); this walks there and places again, up to --tries times.
+With --walk it also walks to --stance first with go_to_stance.py, and on that advice steps
+there and places again, up to --tries times.
 
 Nothing is planned round the robot: the place either goes along its straight lines or stops
 with the part where it was.
@@ -42,15 +42,16 @@ def walk(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("nest", help="nest name, e.g. nest_4 (or a full id like pallet/slot/nest_4)")
-    p.add_argument("--stance", default="pallet_end_left", help="stance to walk to first")
-    p.add_argument("--no-walk", action="store_true", help="place from where the robot stands")
+    p.add_argument("--walk", action="store_true",
+                   help="walk to --stance first, and step where the place says (default: only place)")
+    p.add_argument("--stance", default="pallet_end_left", help="stance to walk to first (with --walk)")
     p.add_argument("--arm", default="left")
     p.add_argument("--tries", type=int, default=3, help="places at most (each after a step)")
     p.add_argument("--accept", type=float, default=0.04, help="go_to_stance --accept for the steps, m")
     a = p.parse_args()
 
     slot = a.nest if "/" in a.nest else "pallet/slot/" + a.nest
-    if not a.no_walk:
+    if a.walk:
         walk([a.stance])
 
     rclpy.init()
@@ -77,7 +78,13 @@ def main():
         if result.success:
             return 0
         m = STANCE.search(result.message)
-        if m is None or k == a.tries:
+        if m is None:
+            return 1
+        if not a.walk:
+            print("not walking (no --walk). To step there yourself:\n  ros2 run g1_manipulation go_to_stance.py "
+                  f"--x {m.group(1)} --y {m.group(2)} --yaw-deg {m.group(3)}", flush=True)
+            return 1
+        if k == a.tries:
             return 1
         walk(["--x", m.group(1), "--y", m.group(2), "--yaw-deg", m.group(3),
               "--accept", str(a.accept), "--accept-yaw-deg", "4"])

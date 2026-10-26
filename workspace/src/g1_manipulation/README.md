@@ -280,9 +280,10 @@ result:
   head camera, which then loses the panel and the pick cannot find it (the pick reaches the same
   shape from the tucked arms anyway). Refused while the hand holds something. `panel_1_left` faces the tray
   square, like `pallet_end_left`, so the panel is held turned as the nests are.
-  `place_in_nest.py` walks to `pallet_end_left` and places into the nest; when the place says the
-  nest is out of the arm's reach from where the walk stopped, it walks to the stance the place
-  names and places again (`--tries`, 3). The held part's arm configuration is fixed by the pick
+  `place_in_nest.py` only places, from where the robot stands; it never walks unless given
+  `--walk`. When the place says the nest is out of the arm's reach from there, it prints the
+  `go_to_stance.py` command for the stance the place names and stops. With `--walk` it first
+  walks to `pallet_end_left` and, on that advice, steps there and places again (`--tries`, 3). The held part's arm configuration is fixed by the pick
   (at the table only the elbow-up one does not pass through the body) and leaves the hand little
   room: from a stance 8 cm off, the nest was out of reach. A place into a nest that cannot start
   therefore searches the nearest stance (within `stance_search_m`, 14 cm, and 12 degrees) from
