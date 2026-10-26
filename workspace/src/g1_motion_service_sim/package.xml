@@ -11,8 +11,10 @@
     wire protocol, and runs the RL walking policy that balances the robot. Launched
     exclusively by g1_bringup's sim.launch.py. See README.
   </description>
-  <maintainer email="gupta.adyansh@gmail.com">Adyansh</maintainer>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
   <license>BSD-3-Clause</license>
+  <author email="gupta.adyansh@gmail.com">Adyansh Gupta</author>
+  <author email="srcmert12@gmail.com">Mert</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

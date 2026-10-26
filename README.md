@@ -198,4 +198,12 @@ docs/               README görselleri
 
 ## Lisans
 
-[grove-g1](https://github.com/Adyansh04/grove-g1) temel alınmıştır; BSD-3-Clause (bkz. `LICENSE`).
+Geliştiren: **Mert** — Doğuş Teknoloji.
+
+Başlangıç noktası olarak [grove-g1](https://github.com/Adyansh04/grove-g1) (Adyansh Gupta) kullanıldı.
+RH56E2 eller, conveyor dünyası ve harita aracı, conveyor odası için Nav2 ayarları ve sonraki
+geliştirmeler Mert'e aittir.
+
+BSD-3-Clause; telif satırları ve koşullar `LICENSE` dosyasında. `g1_hand_interface` paketi
+Apache-2.0'dır. `workspace/src` altına `scripts/import-externals.sh` ile çekilen üçüncü parti
+paketler ve Unitree'nin G1 modeli kendi lisanslarını taşır.

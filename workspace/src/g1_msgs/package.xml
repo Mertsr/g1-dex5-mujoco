@@ -9,8 +9,10 @@
     base approach (g1_locomotion). See README for why each is an action rather
     than a service.
   </description>
-  <maintainer email="gupta.adyansh@gmail.com">Adyansh</maintainer>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
   <license>BSD-3-Clause</license>
+  <author email="gupta.adyansh@gmail.com">Adyansh Gupta</author>
+  <author email="srcmert12@gmail.com">Mert</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>

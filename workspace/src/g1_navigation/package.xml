@@ -7,8 +7,10 @@
     SLAM Toolbox mapping and Nav2 navigation for the G1 on the converged unitree_mujoco
     track. Configuration, launch and maps only -- the nodes are upstream.
   </description>
-  <maintainer email="gupta.adyansh@gmail.com">Adyansh</maintainer>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
   <license>BSD-3-Clause</license>
+  <author email="gupta.adyansh@gmail.com">Adyansh Gupta</author>
+  <author email="srcmert12@gmail.com">Mert</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

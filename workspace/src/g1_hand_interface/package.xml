@@ -3,8 +3,10 @@
   <name>g1_hand_interface</name>
   <version>0.1.0</version>
   <description>ros2_control system interface for the Inspire RH56E2 hand, over a HandCmd / HandState topic pair.</description>
-  <maintainer email="gupta.adyansh@gmail.com">Adyansh Gupta</maintainer>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
   <license>Apache-2.0</license>
+  <author email="gupta.adyansh@gmail.com">Adyansh Gupta</author>
+  <author email="srcmert12@gmail.com">Mert</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>hardware_interface</depend>

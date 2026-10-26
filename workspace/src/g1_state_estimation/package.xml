@@ -8,8 +8,10 @@
     ground truth, published as such; on hardware it refuses to run, because the
     real G1 exposes no odometry topic. See README.
   </description>
-  <maintainer email="gupta.adyansh@gmail.com">Adyansh</maintainer>
+  <maintainer email="srcmert12@gmail.com">Mert</maintainer>
   <license>BSD-3-Clause</license>
+  <author email="gupta.adyansh@gmail.com">Adyansh Gupta</author>
+  <author email="srcmert12@gmail.com">Mert</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
