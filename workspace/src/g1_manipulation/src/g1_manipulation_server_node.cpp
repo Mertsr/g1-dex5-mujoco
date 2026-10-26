@@ -4392,8 +4392,9 @@ void G1ManipulationServer::executeSetArmPosture(
         goal_handle->abort(result);
         return;
     }
-    // "work": the arm's work posture (work_posture_left / _right), palm up in front, where a
-    // pick starts. Only with nothing in that hand: a held part is never swung to a posture.
+    // "work": the arm's work posture (work_posture_left / _right), palm up in front -- the shape
+    // a scoop ends in. Not before a pick: there the hand hides the tray from the head camera.
+    // Only with nothing in that hand: a held part is never swung to a posture.
     if (goal->named_target == "work")
     {
         const auto wp = workPosture(goal->group);
