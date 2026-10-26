@@ -1,0 +1,7 @@
+<library path="g1_hand_system">
+  <class name="g1_hand_interface/G1HandSystem"
+         type="g1_hand_interface::G1HandSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>One Inspire RH56E2 hand on /rh56e2/&lt;side&gt;/{cmd,state}.</description>
+  </class>
+</library>

@@ -1,0 +1,144 @@
+# g1_bringup
+
+The entry point for the whole stack. Launch files, scenes, config and two ordering scripts. No
+compiled code of its own.
+
+`ament_cmake`, Python launch files and integration tests.
+
+```mermaid
+flowchart LR
+    B["bringup.launch.py"]
+    B --> S["sim.launch.py"]
+    B -->|"mode:=mapping<br/>mode:=localization"| N["g1_navigation<br/>nav_stack.launch.py"]
+    B -->|"rviz:=true"| R["rviz.launch.py"]
+    S --> C["control.launch.py"]
+    S --> L["loco.launch.py"]
+    S --> MJ["unitree_mujoco +<br/>motion_service_sim"]
+```
+
+The simulator edge is unconditional: this file stages exactly one, and the navigation stack is
+composed beside it rather than wrapped around it. `nav_stack.launch.py` stages no simulator of its
+own.
+
+## Launch files
+
+| File | Purpose |
+|---|---|
+| `bringup.launch.py` | What an operator runs. Stages the simulator and composes the navigation stack onto it as asked. |
+| `sim.launch.py` | Starts `unitree_mujoco`, `motion_service_sim`, `control.launch.py` and `loco.launch.py`. Checks the DDS environment first. Works standalone. |
+| `control.launch.py` | `robot_state_publisher`, `ros2_control_node` and the spawners. No simulator, so it carries to hardware unchanged — but on the robot it needs `g1_hardware_interface`'s `g1_lowstate_joint_states` alongside it, or the legs and waist never reach `/joint_states` and the TF tree comes up split at the waist. `motion_service_sim` covers that in simulation. |
+| `loco.launch.py` | Starts `g1_loco_bridge` and drives it from configure to active. |
+| `rviz.launch.py` | Starts RViz on a caller-supplied `rviz_config` path. |
+| `activate_arm.launch.py` | Runs `scripts/activate_arm`, the ordered acquire step. |
+| `deactivate_arm.launch.py` | Runs `scripts/deactivate_arm`, the ordered release step. |
+
+## Arguments
+
+All of these belong to `bringup.launch.py`.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `mode` | `none` | `none` is the simulator alone. `mapping` adds the scan pipeline and slam_toolbox. `localization` adds `map_server` and AMCL. |
+| `nav` | `false` | Start Nav2, the gait shaper and the authority bracket. Needs `mode:=localization`. |
+| `rviz` | `false` | Open RViz on the config that matches what is running: the navigation one on the navigation modes, the sensor one otherwise. |
+| `sensors` | `false` | LiDAR, the relay and the `odom` to `base_footprint` chain. The navigation modes turn this on themselves. |
+| `odometry` | `sportmodestate` | What publishes `odom` to `base_footprint`. `sportmodestate` is exact MuJoCo state and what the mission is tuned against; `fast_lio` runs the LiDAR-inertial pipeline the robot uses, over the simulated Mid360, and drifts like the estimate it is. |
+| `world` | `navigation` | Which scene to stage. `navigation` is the facility (map `facility`); `conveyor`, `conveyor_flat`, `conveyor_fixed` and `conveyor2` are the conveyor line (map `conveyor`). |
+| `map` | `""` | Occupancy grid for `mode:=localization`. Empty: the world's own. |
+| `headless` | `true` | `false` shows the MuJoCo viewer. |
+| `pin_pelvis` | `false` | Welds the pelvis and disables the walking policy, for exercising the arms alone. `mode:=none` only. |
+| `waist_hold_rad` | `""` | Sim only. Three comma-separated radians (yaw,roll,pitch) to stand the waist at. Needs `pin_pelvis:=true`. |
+| `sim_start_delay_s` | branch default | Seconds to delay the simulator. Empty means 2.0 bare, 4.0 whenever navigation starts alongside it. |
+
+## Running
+
+```bash
+ros2 launch g1_bringup bringup.launch.py                                      # simulator only
+ros2 launch g1_bringup bringup.launch.py mode:=mapping rviz:=true             # build a map
+ros2 launch g1_bringup bringup.launch.py mode:=localization nav:=true rviz:=true
+ros2 launch g1_bringup bringup.launch.py world:=conveyor_fixed mode:=localization nav:=true rviz:=true
+```
+
+Arms and hands, in order. The order is mandatory: Humble ties command-interface availability to
+hardware component state, so activating the controller before the component can fail the switch.
+
+```bash
+ros2 launch g1_bringup activate_arm.launch.py
+# send a FollowJointTrajectory goal to arm_trajectory_controller,
+# left_hand_controller or right_hand_controller
+ros2 launch g1_bringup deactivate_arm.launch.py
+```
+
+The same step acquires both RH56E2 hands, but only best-effort: a hand that is absent, unpowered or
+not publishing state logs a warning and leaves the arm usable. The arm is the part that fails the
+whole acquire.
+
+`deactivate_arm.launch.py` blocks for about two seconds while the blend weight ramps to zero. That
+is the ramp, not a hang. Ctrl-C is also safe.
+
+Walking by hand needs FSM `Start` first:
+
+```bash
+ros2 action send_goal /g1_loco_bridge/set_mode g1_msgs/action/SetLocoMode "{fsm_id: 4}"
+ros2 action send_goal /g1_loco_bridge/set_mode g1_msgs/action/SetLocoMode "{fsm_id: 500}"
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -r /cmd_vel:=/g1_loco_bridge/cmd_vel -p speed:=0.6 -p turn:=1.57
+```
+
+Both teleop overrides matter. The defaults sit inside the gait's dead zone and the robot will not
+move. See `g1_motion_service_sim` for the measured thresholds.
+
+## g1_navigation is referenced but not depended on
+
+`bringup.launch.py` includes launch files, an RViz config and the maps from `g1_navigation`, and
+`package.xml` says nothing about it. That is deliberate. It already depends on `g1_bringup`, so
+declaring the reverse makes colcon refuse to order the workspace at all.
+
+The references are launch-time path lookups. This package builds and runs with it absent: only
+`mode:=mapping` and `mode:=localization` name `g1_navigation`, and its absence is reported as an
+actionable message rather than a search-path dump. Nothing will warn you if it renames a launch
+file, so its `test_launch_threading` is the compensating check.
+
+## Configuration
+
+| File | Contents |
+|---|---|
+| `config/controllers.yaml` | `controller_manager` at 200 Hz. `G1ArmSdkSystem` starts inactive, `joint_state_broadcaster` active. |
+| `config/sim_sensors.yaml` | LiDAR and camera parameters read by the patched simulator. |
+| `config/g1_sensors.rviz` | RViz for `mode:=none`. Fixed frame `odom`. |
+| `mjcf/*.xml` | Six scene overlays. Staged next to the vendored model at launch and removed on shutdown. |
+
+`config/controllers.yaml` also carries the two RH56E2 hand components and their trajectory
+controllers, all starting inactive alongside the arm. `config/sim_sensors.yaml` additionally
+configures two simulation-only things the patched simulator reads: which bodies publish
+ground-truth poses, and the grasp weld that stands in for finger contact.
+
+## Tests
+
+| Test | Needs a simulator | Covers |
+|---|---|---|
+| `test_sim_bringup` | yes | Bring-up topics, rates, controller and component states. |
+| `test_arm_command` | yes | Ordered activation, weight ramp, closed-loop trajectory, slew clamp. |
+| `test_loco` | yes | LocoClient protocol end to end over DDS. |
+| `test_walk_stand` | yes | The policy stands the robot up unwelded and holds it. |
+| `test_walk_teleop` | yes | Rejection before `Start`, the dead-man, Damp release, randomized sequences. |
+| `test_walk_and_arm` | yes | Walking under `cmd_vel` while an arm trajectory converges. |
+| `test_lidar_geometry` | yes | The LiDAR measures the room it is in. |
+| `ruff_check_g1_bringup` | no | Python lint and import order. |
+
+```bash
+colcon test --packages-select g1_bringup
+colcon test-result --verbose
+```
+
+Every suite here starts a real `unitree_mujoco` and they serialize on a shared resource lock. The
+simulator syncs to CPU time while the walking policy runs on a wall timer, so on a loaded machine
+the two drift and the robot can topple. Re-run a failing suite alone before calling it a
+regression:
+
+```bash
+colcon test --packages-select g1_bringup --ctest-args -R test_walk_stand
+```
+
+The launch suites live here rather than with the node sources they exercise because they all
+include this package's `sim.launch.py`, and hosting them elsewhere would be a dependency cycle.
