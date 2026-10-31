@@ -512,9 +512,16 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     // A thumb-under scoop ("scoop_thumb_<hand>_<edge>"): the hand palm down, the thumb slid in
     // under the panel's edge and the four fingers over its top, closing on it from both sides.
     // The palm-up scoop leaves the wrist's roll at the end of its range all the way to the nest;
-    // turned over, it sits mid-range. Its fingers slide in tipped 10 degrees down: level, the
-    // wrist would have to be as low as the panel's top, out of the arm's reach.
-    scoop_thumb_pitch_rad_ = declare_parameter<double>("scoop_thumb_pitch_deg", 10.0) * M_PI / 180.0;
+    // turned over, it sits mid-range. Its fingers slide in tipped 25 degrees down, as the palm-up
+    // scoop's: the thumb's tip then leads, low, into the gap under the lip, while the rest of it
+    // stays clear of the table.
+    scoop_thumb_pitch_rad_ = declare_parameter<double>("scoop_thumb_pitch_deg", 25.0) * M_PI / 180.0;
+    // ... and aimed at its published grasp, not scoop_raise_m above it: the gap under the panel's
+    // lip on the tray is 2-3 cm, and the thumb goes under it only within about 5 mm of the
+    // published height (MuJoCo, the panel free: 1 cm higher the thumb rides over the lip onto
+    // the top, 1 cm lower it pushes the panel along the table). The published grasp already
+    // keeps the thumb 3 cm off the table where it comes down.
+    scoop_thumb_raise_m_ = declare_parameter<double>("scoop_thumb_raise_m", 0.0);
     // Where the robot stands is not exact. A scoop is also tried with the gripping hand turned
     // about the vertical (deg, counter-clockwise seen from above, for the right hand; mirrored
     // for the left) from square to the edge, and the clamping hand turned too, in the order
@@ -1463,6 +1470,11 @@ bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& p
 double G1ManipulationServer::scoopPitchFor(const std::string& grasp_name) const
 {
     return ("_" + grasp_name + "_").find("_thumb_") != std::string::npos ? scoop_thumb_pitch_rad_ : scoop_pitch_rad_;
+}
+
+double G1ManipulationServer::scoopRaiseFor(const std::string& grasp_name) const
+{
+    return ("_" + grasp_name + "_").find("_thumb_") != std::string::npos ? scoop_thumb_raise_m_ : scoop_raise_m_;
 }
 
 std::optional<std::map<std::string, double>> G1ManipulationServer::workPosture(const std::string& group)
@@ -2594,7 +2606,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                     Attempt at{ turn == 0.0 ? c.name : std::string(label),
                                 a,
                                 *c.pose,
-                                raised(g, up_, scoop_raise_m_),
+                                raised(g, up_, scoopRaiseFor(cname)),
                                 geometry_msgs::msg::Pose() };
                     at.entry    = slideBack(at.grasp, scoop_slide_m_, up_);
                     at.pregrasp = raised(*at.entry, up_, scoop_hover_m_);

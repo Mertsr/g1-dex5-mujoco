@@ -451,11 +451,11 @@
        top. scoop_thumb_open: the thumb swung across under the palm and bent a little, so it
        passes level under the lip (27 mm off the table) while the straight fingers clear the top;
        scoop_thumb_closed: the thumb bent up against the underside and the fingers curled down
-       onto the top, each about 0.15-0.45 rad past where it first touches (fingers 0.15, thumb
-       0.42 in MuJoCo), so it presses without levering the panel round in the hand. -->
+       onto the top: the fingers 0.6 rad and the thumb 0.18 rad past where they first touch in
+       MuJoCo, so it presses without levering the panel round in the hand. -->
   <group_state name="scoop_thumb_open" group="left_hand">
     <joint name="left_thumb_1_joint" value="1.20"/>
-    <joint name="left_thumb_2_joint" value="0.30"/>
+    <joint name="left_thumb_2_joint" value="0.40"/>
     <joint name="left_index_1_joint" value="0.00"/>
     <joint name="left_middle_1_joint" value="0.00"/>
     <joint name="left_ring_1_joint" value="0.00"/>

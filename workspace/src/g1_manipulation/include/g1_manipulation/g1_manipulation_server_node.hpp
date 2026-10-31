@@ -253,6 +253,9 @@ private:
     // The fingers' pitch below the horizontal a scoop grasp is levelled to: scoop_thumb_pitch_deg
     // for a thumb-under one ("scoop_thumb_..."), scoop_pitch_deg for the others.
     double scoopPitchFor(const std::string& grasp_name) const;
+    // How far above its published grasp a scoop is aimed: scoop_thumb_raise_m for a thumb-under
+    // one, scoop_raise_m for the others.
+    double scoopRaiseFor(const std::string& grasp_name) const;
     /// This node's own motion, no planner and no IK service: @p link to @p goal along the
     /// straight line, a few millimetres at a time, the joints moved by damped least squares on
     /// the hand's Jacobian -- continuous, so the arm can never jump to another configuration
@@ -427,7 +430,8 @@ private:
     /// once down at the table before the slide is called off (flatter, its base meets the
     /// table's edge).
     double scoop_pitch_rad_{ 0.436 };
-    double scoop_thumb_pitch_rad_{ 0.175 };
+    double scoop_thumb_pitch_rad_{ 0.436 };
+    double scoop_thumb_raise_m_{ 0.0 };
     double scoop_pitch_tolerance_rad_{ 0.14 };
     /// Where the robot stands is not exact: a scoop is also tried with the gripping hand turned
     /// about the vertical from square to the edge (and the clamping hand, scoop_clamp_turns_rad_).
