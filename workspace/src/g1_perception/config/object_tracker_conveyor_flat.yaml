@@ -142,9 +142,16 @@ g1_object_tracker:
       # Only the scoops here: edge_high (the top pinch of object_tracker_conveyor.yaml) does not
       # hold the panel, and with it listed a pick whose scoops are out of reach went on to it
       # instead of saying so.
+      # scoop_thumb_left_near: the left hand turned over -- palm down, the thumb slid in under
+      # the near edge (about 7 cm) and the four fingers over the top, closing on the panel from
+      # both sides (scoop_thumb_open / _closed in g1.srdf; fingers 10 degrees down, the server's
+      # scoop_thumb_pitch_deg). The wrist's roll then stays mid-range from the table to the
+      # nest; palm up it is at the end of its range. Its fingers point most away from the robot,
+      # so the pick tries it before scoop_left_near.
       grasps:
         - "scoop_right_near  0.1144 -0.0779 -0.0230  1.5881 -0.8177 1.5597"
         - "scoop_left_near   0.0444 -0.0780 -0.0222  1.5881 -0.8177 1.5597"
+        - "scoop_thumb_left_near  0.0739 -0.0044 -0.0691  -1.5662 -1.3963 1.5663"
         - "scoop_right_far   0.0002 -0.0484 0.0528  -1.2196 1.5364 1.9233"
         - "scoop_left_far    0.1002 -0.0483 0.0516  -1.2196 1.5364 1.9233"
 

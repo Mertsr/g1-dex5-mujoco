@@ -502,6 +502,12 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     scoop_pitch_rad_ = declare_parameter<double>("scoop_pitch_deg", 25.0) * M_PI / 180.0;
     scoop_pitch_tolerance_rad_ =
         declare_parameter<double>("scoop_pitch_tolerance_deg", 8.0) * M_PI / 180.0;
+    // A thumb-under scoop ("scoop_thumb_<hand>_<edge>"): the hand palm down, the thumb slid in
+    // under the panel's edge and the four fingers over its top, closing on it from both sides.
+    // The palm-up scoop leaves the wrist's roll at the end of its range all the way to the nest;
+    // turned over, it sits mid-range. Its fingers slide in tipped 10 degrees down: level, the
+    // wrist would have to be as low as the panel's top, out of the arm's reach.
+    scoop_thumb_pitch_rad_ = declare_parameter<double>("scoop_thumb_pitch_deg", 10.0) * M_PI / 180.0;
     // Where the robot stands is not exact. A scoop is also tried with the gripping hand turned
     // about the vertical (deg, counter-clockwise seen from above, for the right hand; mirrored
     // for the left) from square to the edge, and the clamping hand turned too, in the order
@@ -1447,6 +1453,11 @@ bool G1ManipulationServer::planWithRecovery(MoveGroup& group, MoveGroup::Plan& p
     return true;
 }
 
+double G1ManipulationServer::scoopPitchFor(const std::string& grasp_name) const
+{
+    return ("_" + grasp_name + "_").find("_thumb_") != std::string::npos ? scoop_thumb_pitch_rad_ : scoop_pitch_rad_;
+}
+
 std::optional<std::map<std::string, double>> G1ManipulationServer::workPosture(const std::string& group)
 {
     const std::vector<double>& v = group.rfind("left", 0) == 0 ? work_posture_left_ : work_posture_right_;
@@ -2306,7 +2317,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     {
         if (scoop_table_box_ && c.pose && isScoopGrasp(graspNameOf(c.name)))
         {
-            surface_id = addSurfaceSlab(object_id, levelScoop(*c.pose, up_, scoop_pitch_rad_));
+            surface_id = addSurfaceSlab(object_id, levelScoop(*c.pose, up_, scoopPitchFor(graspNameOf(c.name))));
             break;
         }
     }
@@ -2354,6 +2365,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     /// how the two hands are turned from square to the edge.
     int    clamp_approach = -1;
     double scoop_turn     = 0.0;
+    double scoop_pitch    = scoop_pitch_rad_;  // the chosen scoop's (scoopPitchFor)
     double clamp_turn     = 0.0;
 
     // Every failure below leaves the hand open and nothing attached, so a retry starts from a
@@ -2547,7 +2559,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 resolveArm(a == "left" ? std::string("right") : std::string("left"), other);
                 usePinchFrame(other);
                 const geometry_msgs::msg::Pose published =
-                    levelScoop(handGoalFromGrasp(*c.pose, ctx.is_left), up_, scoop_pitch_rad_);
+                    levelScoop(handGoalFromGrasp(*c.pose, ctx.is_left), up_, scoopPitchFor(cname));
                 tf2::Quaternion pq;
                 tf2::fromMsg(published.orientation, pq);
 
@@ -3047,6 +3059,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         entry_goal    = at.entry;
         clamp_approach = at.clamp_approach;
         scoop_turn     = at.turn;
+        scoop_pitch    = scoopPitchFor(graspNameOf(at.label));
         clamp_turn     = at.clamp_turn;
         RCLCPP_INFO(get_logger(), "pick %s: trying %s with the %s hand", object_id.c_str(),
                     at.label.c_str(), arm_name.c_str());
@@ -3183,7 +3196,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         if (entry_goal)
         {
             refreshUp();
-            grasp_goal = levelScoop(grasp_goal, up_, scoop_pitch_rad_);
+            grasp_goal = levelScoop(grasp_goal, up_, scoop_pitch);
             entry_goal = slideBack(grasp_goal, scoop_slide_m_, up_);
         }
         return true;
@@ -3230,7 +3243,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 "(planned %.1f)",
                 object_id.c_str(),
                 pitch * 180.0 / M_PI,
-                scoop_pitch_rad_ * 180.0 / M_PI);
+                scoop_pitch * 180.0 / M_PI);
             return pitch;
         }
         catch (const tf2::TransformException& e)
@@ -3247,7 +3260,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     for (int round = 0; entry_goal; ++round)
     {
         const auto pitch = pitch_now();
-        if (!pitch || *pitch >= scoop_pitch_rad_ - scoop_pitch_tolerance_rad_)
+        if (!pitch || *pitch >= scoop_pitch - scoop_pitch_tolerance_rad_)
         {
             break;
         }
@@ -3257,7 +3270,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
                 get_logger(),
                 "pick %s: the hand is %.0f deg flatter than planned; re-levelling it for the lean",
                 object_id.c_str(),
-                (scoop_pitch_rad_ - *pitch) * 180.0 / M_PI);
+                (scoop_pitch - *pitch) * 180.0 / M_PI);
             const geometry_msgs::msg::Pose here = arm_group->getCurrentPose(arm.grasp_frame).pose;
             if (!moveLinear(
                     *arm_group,
@@ -3284,7 +3297,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             Pick::Feedback::PHASE_APPROACH,
             "the hand is " +
                 std::to_string(
-                    static_cast<int>(std::lround((scoop_pitch_rad_ - *pitch) * 180.0 / M_PI))) +
+                    static_cast<int>(std::lround((scoop_pitch - *pitch) * 180.0 / M_PI))) +
                 " deg flatter than planned at the table, re-levelled once: its base would meet the "
                 "table's edge. The robot is leaning as it reaches; stand nearer the part" +
                 (scoop_stance_hint.empty() ? std::string() : " (" + scoop_stance_hint + ")"));
