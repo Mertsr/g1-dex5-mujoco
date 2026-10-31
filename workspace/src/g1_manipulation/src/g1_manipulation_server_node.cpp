@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <iomanip>
+#include <sstream>
 #include <memory>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -4394,7 +4396,8 @@ void G1ManipulationServer::executeSetArmPosture(
     }
     // "work": the arm's work posture (work_posture_left / _right), palm up in front -- the shape
     // a scoop ends in. Not before a pick: there the hand hides the tray from the head camera.
-    // Only with nothing in that hand: a held part is never swung to a posture.
+    // With a part in that hand, the hand goes to the posture's hand position on a straight line
+    // instead (below): a held part is never swung to a posture.
     if (goal->named_target == "work")
     {
         const auto wp = workPosture(goal->group);
@@ -4407,9 +4410,61 @@ void G1ManipulationServer::executeSetArmPosture(
                 held = id;
             }
         }
+        // Holding a part, the hand is not swung there: it goes on a straight line to where the
+        // posture puts it, turned as it is now (the part stays level), and the arm's spare
+        // degree of freedom is pulled toward the posture all along (own_posture_gain).
+        ArmContext        warm;
+        const std::string wname = goal->group.rfind("left", 0) == 0 ? "left" : "right";
+        if (wp && !held.empty() && resolveArm(wname, warm))
+        {
+            moveit::core::RobotStatePtr cur = group->getCurrentState(2.0);
+            bool                        ok  = false;
+            std::string                 why = "no current robot state";
+            if (cur)
+            {
+                moveit::core::RobotState at(*cur);
+                at.setVariablePositions(*wp);
+                at.updateLinkTransforms();
+                const Eigen::Vector3d    p      = at.getGlobalLinkTransform(warm.grasp_frame).translation();
+                geometry_msgs::msg::Pose target = group->getCurrentPose(warm.grasp_frame).pose;
+                target.position.x               = p.x();
+                target.position.y               = p.y();
+                target.position.z               = p.z();
+                refreshUp();
+                allowHandContact(warm, { "<octomap>", held }, true);
+                double reached = 0.0;
+                ok  = moveOwnLine(*group, warm.grasp_frame, target, "work (holding " + held + ")", 20.0, false,
+                                  &reached, 0.0);
+                allowHandContact(warm, { "<octomap>", held }, false);
+                why = "reached " + std::to_string(static_cast<int>(std::round(reached * 100.0))) + "% of the line";
+            }
+            std::ostringstream js;
+            if (moveit::core::RobotStatePtr end = group->getCurrentState(2.0))
+            {
+                js << " [joints";
+                for (const auto& name : end->getJointModelGroup(goal->group)->getVariableNames())
+                {
+                    js << " " << std::fixed << std::setprecision(3) << end->getVariablePosition(name);
+                }
+                js << "]";
+            }
+            result->success = ok;
+            result->message = (ok ? goal->group + " at the work posture's hand position holding " + held :
+                                    "could not take " + held + " to the work posture's hand position: " + why) +
+                              js.str();
+            if (ok)
+            {
+                goal_handle->succeed(result);
+            }
+            else
+            {
+                goal_handle->abort(result);
+            }
+            return;
+        }
         result->success = wp && held.empty() && moveToJoints(*group, *wp, "work posture");
         result->message = !wp             ? "'" + goal->group + "' has no work posture (work_posture_left/_right)" :
-                          !held.empty()   ? "the hand holds " + held + ": a held part is not swung to a posture" :
+                          !held.empty()   ? "the hand holds " + held + " and the arm cannot be resolved" :
                           result->success ? goal->group + " in the work posture" :
                                             "could not reach the work posture (see the log)";
         if (result->success)
