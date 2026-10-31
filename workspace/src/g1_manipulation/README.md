@@ -296,9 +296,16 @@ result:
   of reach from `pallet_end_left` with either scoop, hence its own stance 15 cm further on (the
   nests' spacing). 8 cm nearer than that the wrist runs into the head on the way above the nest;
   the line stops before it ("Nothing was swung") and the result says to stand further back.
-  Whether the hand holds the panel this way on the real robot is untested: the harness welds the
-  part to the palm, and without the weld neither scoop holds the panel in MuJoCo (its finger
-  model presses too weakly, palm up as well).
+  **The thumb does not actually get under the panel.** Measured against the panel as it lies
+  settled on the tray, the gap under its lip is 2-3 cm; free in MuJoCo with a stiff thumb, the
+  thumb goes under only within about 5 mm of one height (1 cm lower it hits the table or pushes
+  the panel along, 1 cm higher it rides over the lip). With the harness's soft finger gains the
+  thumb ended on top of the panel at every height tried (`scoop_thumb_raise_m` 0, +1, +2 cm);
+  the placements above went through because the scene welds the panel to the palm. The grasp is
+  aimed at its published height exactly (`scoop_thumb_raise_m` 0) with the thumb 3 cm off the
+  table where it comes down, and lets go into `scoop_thumb_release` (the thumb straightened: half
+  bent it is not open enough for the weld to let go). See the repository README's status section
+  for why the branch stops here.
 
   `work` puts the left arm in its work posture (`work_posture_left`): palm up in front, elbow up,
   the shape the scoop picks the panel in and every later move keeps -- the arm's spare degree of

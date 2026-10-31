@@ -20,6 +20,82 @@ The simulator speaks the same DDS topics as the real robot, so the bridge layer,
 stack and the control-authority logic all carry over to hardware without code changes. Moving to
 the physical G1 is a domain-ID and interface change, not a rewrite.
 
+## Status of this branch (`pallet-nest-end`): panels into the pallet's nests
+
+**Goal.** In `world:=conveyor_fixed`, the G1 (Inspire RH56E2 hands) takes a BSH panel off the tray
+with its left hand, carries it to the start of the belt and sets it into the pallet's nest_4, then
+a second panel into nest_3, without swinging the panel into its head, body or the cell.
+
+**Result: it does not work as a real grasp, and the main reason is the arm, not the planner.**
+What runs end to end in MuJoCo does so because the simulator welds the panel to the palm once the
+fingers close; the hand alone does not hold it the way the arm needs it held.
+
+### Why: the 7-DOF arm cannot carry and place palm up
+
+The only grasp this hand can slide under a panel lying on the tray is the palm-up scoop (the four
+straight fingers wedge into the 2-3 cm gap under the panel's lip, the thumb closes on top). The
+G1's arm runs out of joint range holding a hand palm up in front of the body:
+
+- **At the table only the elbow-up arm configuration avoids the torso.** Every elbow-down IK
+  answer passes through the body. With the hand held still the elbow can move only about 5 cm
+  before the wrist roll and the shoulder yaw reach their limits, so the arm cannot be re-shaped
+  once the panel is in hand: the configuration the pick ends in is the one it places with.
+- **Palm up puts the wrist roll at the end of its range** (limit ±1.97 rad, about ±113°).
+  Lowering the panel into nest_4 from `pallet_end_left` the wrist roll reaches 1.87 and the
+  shoulder yaw -2.48 (limit -2.62): 0.10 and 0.14 rad to spare.
+- **So the place has almost no room.** With the robot 8 cm to the right of the stance the lower
+  stopped 1 cm short of the nest, both joints at their limits. Carrying in a different arm posture
+  (the "work" posture, the elbow further out) changes nothing: the nest, not the carry, sets the
+  joints at the bottom. nest_3, 15 cm further along the belt, is out of reach from the same stance
+  (shoulder yaw at its limit) and needs its own stance (`pallet_nest3_left`).
+- Our own straight-line planner (`moveOwnLine`: damped least squares, joint-limit handling in the
+  null space, collision-checked waypoints) and the stance search (`stanceFor`, the place says
+  where to stand) get the most out of that range, but cannot add range the arm does not have.
+
+Turned over (palm down) the same arm is comfortable: in the nests the wrist roll sits at -0.3 to
+0.8 and the shoulder yaw at -0.7 to -1.5, and nest_4 was reached from the stance and 8 cm off it
+in all four directions, nest_3 from its stance and 8 cm to the side (4-16 mm off the nest).
+
+### Why palm down does not save it: the hand
+
+Palm down means the thumb has to go under the panel and the fingers over it
+(`scoop_thumb_left_near`). The RH56E2 has one thumb, thicker and softer than the four fingers
+together, and the gap under the panel's lip on the tray is only 2-3 cm:
+
+- With the panel free in MuJoCo and a stiff thumb, the thumb goes under the lip only within about
+  5 mm of one height. 1 cm lower it hits the table or pushes the panel 15-30 mm along it; 1 cm
+  higher it rides over the lip onto the top.
+- With the simulator's own (soft) finger gains the thumb ended on top of the panel at every height
+  tried (0, +1, +2 cm). The placements above still succeeded only because the weld held the panel.
+- One hand cannot hold the 0.6 m panel level either way: in MuJoCo neither scoop holds it without
+  the weld, palm up or down, even with the finger torque raised to 3 Nm. The panel sags and turns
+  in the hand (it settles 2-4 cm as the fingers close; the pick now re-measures the held pose after
+  the lift for that).
+- The RH56E2's fingertip force (up to 30 N per the vendor) would be enough on paper for a 0.3 kg
+  panel held near its middle; the problem is the geometry of getting the thumb under it, not the
+  force.
+
+### What would make it work
+
+- **A fixture or tray that lifts the panel's edge** (4 cm or more of clearance), so the thumb can
+  go under with room for arm sag; or panels presented on edge.
+- **A different end effector** for this part (a flat two-jaw or suction gripper needs no gap and
+  no wrist roll).
+- **Two hands**, the second taking the panel's other half (the palm-up two-hand scoop is in the
+  code, `scoop_two_hand`), or a regrasp from palm up to palm down between the hands.
+- **A first finger move that lifts the edge** before the thumb goes in, as a person does; untried,
+  and the simulator's finger model is too weak to judge it.
+- **Nests turned toward the robot** (or the robot placing from the pallet's side), so the
+  palm-up place lands mid-range of the wrist instead of at its end.
+
+### What is in the code
+
+- `scoop_thumb_left_near` is listed first in `g1_perception/config/object_tracker_conveyor_flat.yaml`,
+  so the left pick tries palm down first; delete that line (or move it below `scoop_left_near`)
+  to go back to the palm-up scoop.
+- Commands, parameters and every measurement: [`g1_manipulation/README.md`](workspace/src/g1_manipulation/README.md),
+  section "Into the pallet's nests".
+
 ## What it does today
 
 The robot maps a facility with SLAM Toolbox, localizes against the saved map, and drives itself to
