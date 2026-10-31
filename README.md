@@ -20,11 +20,14 @@ The simulator speaks the same DDS topics as the real robot, so the bridge layer,
 stack and the control-authority logic all carry over to hardware without code changes. Moving to
 the physical G1 is a domain-ID and interface change, not a rewrite.
 
-## Status of this branch (`pallet-nest-end`): panels into the pallet's nests
+## Status of this branch (`panel_place`): panels into the pallet's nests
 
 **Goal.** In `world:=conveyor_fixed`, the G1 (Inspire RH56E2 hands) takes a BSH panel off the tray
 with its left hand, carries it to the start of the belt and sets it into the pallet's nest_4, then
 a second panel into nest_3, without swinging the panel into its head, body or the cell.
+
+**Video:** [`docs/media/BSH_place.mp4`](docs/media/BSH_place.mp4) -- the left hand setting a panel
+into a nest in the simulator (25 s).
 
 **Result: it does not work as a real grasp, and the main reason is the arm, not the planner.**
 What runs end to end in MuJoCo does so because the simulator welds the panel to the palm once the
