@@ -2378,6 +2378,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
     std::optional<geometry_msgs::msg::Pose> grasp_pose;
     geometry_msgs::msg::Pose                grasp_goal, pregrasp_goal;
     std::string                             open_shape = "open", closed_shape = "closed";
+    std::string                             release_shape;  // "<grasp>_release", if the hand has it
     /// A scoop's start: down at the surface in front of the edge, slid in from there.
     std::optional<geometry_msgs::msg::Pose> entry_goal;
     /// Which of scoop_clamp_approaches the other hand comes in from (-1: it cannot clamp), and
@@ -3099,6 +3100,7 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             const std::string name       = graspNameOf(at.label);
             const std::string own_open   = shapeFor(name, "_open", shapes);
             const std::string own_closed = shapeFor(name, "_closed", shapes);
+            release_shape                = shapeFor(name, "_release", shapes);
             open_shape                   = !own_open.empty() ? own_open :
                                            std::find(shapes.begin(), shapes.end(), "pinch_open") != shapes.end() ?
                                                                "pinch_open" :
@@ -3752,7 +3754,14 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
         std::lock_guard<std::mutex> lock(held_mutex_);
         held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
         held_arm_[object_id]   = arm_name;
-        held_release_[object_id] = grasp_pose ? open_shape : std::string("open");
+        // Let go into "<grasp>_release" if the hand has it (a thumb-under scoop goes in with the
+        // thumb half bent, which is not open enough to count as letting go), else the shape it
+        // went in with.
+        {
+            held_release_[object_id] = grasp_pose && !release_shape.empty() ? release_shape :
+                                       grasp_pose           ? open_shape :
+                                                              std::string("open");
+        }
         held_scoop_[object_id]   = static_cast<bool>(entry_goal);
         held_yaw_free_[object_id] =
             static_cast<bool>(findHypothesis(*detection, object_id + "/symmetric/z"));
