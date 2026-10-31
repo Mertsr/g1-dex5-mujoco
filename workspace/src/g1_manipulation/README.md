@@ -270,8 +270,35 @@ result:
   ros2 action send_goal /g1_manipulation_server/pick g1_msgs/action/Pick "{object_id: panel_1, arm: left, hands: 1}" --feedback
   ros2 action send_goal /g1_manipulation_server/set_arm_posture g1_msgs/action/SetArmPosture "{group: left_arm, named_target: raise_14}" --feedback
   ros2 run g1_manipulation go_to_stance.py pallet_approach_left
+  ros2 run g1_manipulation go_to_stance.py pallet_end_left
   ros2 run g1_manipulation place_in_nest.py nest_4
+  # the next panel: the same pick and raise_14, then
+  ros2 run g1_manipulation go_to_stance.py pallet_nest3_left
+  ros2 run g1_manipulation place_in_nest.py nest_3
   ```
+
+  **Thumb under, palm down (`scoop_thumb_left_near`).** The left hand takes the panel turned
+  over: palm down, the thumb slid in about 5 cm under the near edge's lip, the four fingers over
+  the top, fingers tipped 10 degrees down (`scoop_thumb_pitch_deg`), closing on it from both
+  sides (`scoop_thumb_open` / `scoop_thumb_closed` in g1.srdf). Its fingers point most away from
+  the robot, so the pick tries it first; the palm-up `scoop_left_near` is the fallback. Palm up,
+  the wrist's roll was at the end of its range all the way to the nest (1.87 of 1.97 rad, the
+  shoulder's yaw at -2.48 of -2.62): from `pallet_end_left` 8 cm to the right the lower stopped
+  1 cm short with both at their limits. Palm down they sit mid-range (wrist roll -0.3 to 0.8,
+  shoulder yaw -0.7 to -1.5 in the nest). A panel lying tilted on the tray turns level between
+  thumb and fingers as the hand closes, 25-36 mm from where the grasp put it; once it is up the
+  pick measures how it is held again from the part's pose (`held_refresh_max_m`, 5 cm /
+  `held_refresh_max_deg`, 30 degrees: further, the pose is of something else) and says how far
+  it settled. Without that the place set it down 8-28 mm off. MuJoCo harness, welded scene
+  (pallet stances teleported): nest_4 from `pallet_end_left` and 8 cm forward, back, left and
+  right of it, every time, 4-10 mm and 2.6 degrees off; nest_3 from `pallet_nest3_left` and 8 cm
+  to the right, 9-16 mm and 3-4 degrees; nest_3 with nest_4 already filled, 5 mm. nest_3 is out
+  of reach from `pallet_end_left` with either scoop, hence its own stance 15 cm further on (the
+  nests' spacing). 8 cm nearer than that the wrist runs into the head on the way above the nest;
+  the line stops before it ("Nothing was swung") and the result says to stand further back.
+  Whether the hand holds the panel this way on the real robot is untested: the harness welds the
+  part to the palm, and without the weld neither scoop holds the panel in MuJoCo (its finger
+  model presses too weakly, palm up as well).
 
   `work` puts the left arm in its work posture (`work_posture_left`): palm up in front, elbow up,
   the shape the scoop picks the panel in and every later move keeps -- the arm's spare degree of
@@ -290,7 +317,7 @@ result:
   which the held part goes above the nest and down into it, and ends its message with
   `go_to_stance.py --x .. --y .. --yaw-deg ..` and `[stance x=.. y=.. yaw_deg=..]`.
 
-  The next panel goes to `pallet/slot/nest_3` from the same stance. `raise_14` lifts the hand
+  The next panel goes to `pallet/slot/nest_3` from `pallet_nest3_left`. `raise_14` lifts the hand
   14 cm straight up from wherever the pick left it, turned as it is (any `raise_<cm>` up to 40
   works, for either arm): the panel's underside then clears the rails, the nests' cradles and a
   panel already in nest_4. A fixed joint posture for this (the former `carry_nest`) turned the

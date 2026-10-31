@@ -336,6 +336,13 @@ G1ManipulationServer::G1ManipulationServer(const rclcpp::NodeOptions& options)
     grasp_approach_m_    = declare_parameter<double>("grasp_approach_m", 0.20);
     // Re-aiming before the descent follows a part this far at most; further, it was knocked.
     reaim_max_shift_m_   = declare_parameter<double>("reaim_max_shift_m", 0.04);
+    // A part settles in the hand as it closes: a panel lying tilted on the tray (one edge on its
+    // lip) turns level between thumb and fingers. How it is held is measured again once it is
+    // lifted, from the part's pose then, if that is within held_refresh_max_m /
+    // held_refresh_max_deg of where the grasp put it (further, the pose is of something else:
+    // the tracker can take a held panel for one still on the tray). 0 turns it off.
+    held_refresh_max_m_   = declare_parameter<double>("held_refresh_max_m", 0.05);
+    held_refresh_max_rad_ = declare_parameter<double>("held_refresh_max_deg", 30.0) * M_PI / 180.0;
     locate_timeout_s_    = declare_parameter<double>("locate_timeout_s", 3.0);
     linear_min_fraction_ = declare_parameter<double>("linear_min_fraction", 0.95);
     // For the moves that carry a held part into a slot or raise it (raise_<cm>): a straight
@@ -3750,8 +3757,51 @@ void G1ManipulationServer::executePick(const std::shared_ptr<GoalHandle<Pick>>& 
             held_support_clamps_.erase(object_id);
         }
     }
+    // How it is held, measured again now it is up (held_refresh_max_m): the part's pose after
+    // the lift against where the hand is.
+    std::string settled_note;
+    if (held_refresh_max_m_ > 0.0)
+    {
+        rclcpp::sleep_for(std::chrono::milliseconds(500));  // a pose taken after the lift
+        const auto fresh = lookUpObject(object_id);
+        const auto now_pose =
+            fresh ? toPlanningFrame(fresh->results.front().pose.pose,
+                                    fresh->header.frame_id.empty() ? object_frame : fresh->header.frame_id) :
+                    std::nullopt;
+        if (now_pose)
+        {
+            tf2::Transform world_T_grasp, world_T_object;
+            tf2::fromMsg(arm_group->getCurrentPose(arm.grasp_frame).pose, world_T_grasp);
+            tf2::fromMsg(*now_pose, world_T_object);
+            std::lock_guard<std::mutex> lock(held_mutex_);
+            const tf2::Transform predicted = world_T_grasp * held_grasp_[object_id];
+            const tf2::Transform off       = world_T_object * predicted.inverse();
+            const double         shift     = off.getOrigin().length();
+            const double         turn      = off.getRotation().getAngle();
+            if (shift <= held_refresh_max_m_ && std::min(turn, 2.0 * M_PI - turn) <= held_refresh_max_rad_)
+            {
+                held_grasp_[object_id] = world_T_grasp.inverse() * world_T_object;
+                RCLCPP_INFO(get_logger(),
+                            "pick %s: settled %.0f mm / %.0f deg in the hand from where the grasp put it; "
+                            "held as measured now",
+                            object_id.c_str(), shift * 1000.0, std::min(turn, 2.0 * M_PI - turn) * 180.0 / M_PI);
+                if (shift > 0.005)
+                {
+                    settled_note = " (it settled " + std::to_string(static_cast<int>(std::round(shift * 1000.0))) +
+                                   " mm in the hand)";
+                }
+            }
+            else
+            {
+                RCLCPP_WARN(get_logger(),
+                            "pick %s: the part's pose after the lift is %.0f mm / %.0f deg from where the "
+                            "grasp put it; not taken (another part?), held as grasped",
+                            object_id.c_str(), shift * 1000.0, std::min(turn, 2.0 * M_PI - turn) * 180.0 / M_PI);
+            }
+        }
+    }
     result->success = true;
-    result->message = "picked " + object_id + " with the " + arm_name + " hand" +
+    result->message = "picked " + object_id + " with the " + arm_name + " hand" + settled_note +
                       (support_name.empty() ? std::string() :
                                               (", the " + support_name + " hand " +
                                                (clamp ? "clamping the other half" : "under it"))) +
@@ -4089,7 +4139,16 @@ void G1ManipulationServer::executePlace(const std::shared_ptr<GoalHandle<Place>>
         if (straight_only)
         {
             const std::string why = last_own_why_;
-            if (const auto st = stanceFor(*arm_group, arm.grasp_frame, preplace, place_goal))
+            const auto st = stanceFor(*arm_group, arm.grasp_frame, preplace, place_goal);
+            // The search's dry runs check no collisions; one that says "from here" means the line
+            // reaches but runs into something -- the robot's own body, too near the nest. Not
+            // advice: stepping on the spot would just repeat it.
+            if (st && std::hypot(st->dx, st->dy) < 0.01 && std::abs(st->dyaw_deg) < 2.0)
+            {
+                advice = " The arm reaches the nest from here but runs into that on the way; if it is "
+                         "the robot's own body, stand further back from the nest.";
+            }
+            else if (st)
             {
                 char buf[256];
                 std::snprintf(buf, sizeof(buf),

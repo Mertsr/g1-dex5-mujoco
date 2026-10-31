@@ -319,6 +319,8 @@ private:
 
     // Object grasps published with the object pose (see handGoalFromGrasp).
     double grasp_approach_m_{ 0.20 };  ///< straight-line approach and retreat length
+    double held_refresh_max_m_{ 0.05 };   ///< how far the part may have settled in the hand and be re-measured
+    double held_refresh_max_rad_{ 0.52 };
     double reaim_max_shift_m_{ 0.04 };  ///< how far a part may move before the descent and still be followed
     double linear_min_fraction_{ 0.95 };
     double linear_jump_threshold_{ 2.0 };

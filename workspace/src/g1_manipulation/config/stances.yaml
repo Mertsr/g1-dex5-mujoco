@@ -30,6 +30,11 @@ stances:
   # (the arm folds back too far). Raise the panel first (SetArmPosture left_arm raise_14), so it
   # comes in over the rails and a panel already seated in nest_4.
   pallet_end_left: {x: -0.50, y: 0.42, yaw_deg: 0.0, frame: odom}
+  # nest_3 with the thumb-under scoop (scoop_thumb_left_near): 15 cm further along the belt than
+  # pallet_end_left, the nests' spacing, so the hand meets nest_3 as it meets nest_4 from there.
+  # From pallet_end_left itself nest_3 is out of reach with either scoop (the shoulder's yaw at
+  # its limit palm up, out of reach palm down).
+  pallet_nest3_left: {x: -0.35, y: 0.42, yaw_deg: 0.0, frame: odom}
 
   # On the way to pallet_end_left: beside the belt's start, clear of its near corner (the leg at
   # x -0.15, y 0.26). go_to_stance.py walks straight, so going from the tray to pallet_end_left
